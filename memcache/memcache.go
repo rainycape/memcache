@@ -128,6 +128,8 @@ func (r response) asError() error {
 		return ErrNotStored
 	case respInvalidIncrDecr:
 		return ErrBadIncrDec
+	case respItemNotStored:
+		return ErrNotStored
 	}
 	return r
 }
