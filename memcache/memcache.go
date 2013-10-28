@@ -333,7 +333,7 @@ func (cte *ConnectTimeoutError) Error() string {
 	return "memcache: connect timeout to " + cte.Addr.String()
 }
 
-func (c *Client) dial(addr net.Addr) (net.Conn, error) {
+func (c *Client) dial(addr *Addr) (net.Conn, error) {
 	type connError struct {
 		cn  net.Conn
 		err error
@@ -359,7 +359,7 @@ func (c *Client) dial(addr net.Addr) (net.Conn, error) {
 	return nil, &ConnectTimeoutError{addr}
 }
 
-func (c *Client) getConn(addr net.Addr) (*conn, error) {
+func (c *Client) getConn(addr *Addr) (*conn, error) {
 	cn, ok := c.getFreeConn(addr)
 	if !ok {
 		nc, err := c.dial(addr)
@@ -544,7 +544,7 @@ func (c *Client) parseItemResponse(key string, cn *conn, release bool) (*Item, e
 // cache misses. Each key must be at most 250 bytes in length.
 // If no error is returned, the returned map will also be non-nil.
 func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
-	keyMap := make(map[net.Addr][]string)
+	keyMap := make(map[*Addr][]string)
 	for _, key := range keys {
 		if !legalKey(key) {
 			return nil, ErrMalformedKey
@@ -560,7 +560,7 @@ func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
 	for addr, keys := range keyMap {
 		ch := make(chan *Item)
 		chs = append(chs, ch)
-		go func(addr net.Addr, keys []string, ch chan *Item) {
+		go func(addr *Addr, keys []string, ch chan *Item) {
 			defer close(ch)
 			cn, err := c.getConn(addr)
 			if err != nil {
