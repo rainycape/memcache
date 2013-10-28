@@ -201,6 +201,7 @@ func New(server ...string) *Client {
 // NewFromSelector returns a new Client using the provided ServerSelector.
 func NewFromSelector(ss ServerSelector) *Client {
 	return &Client{
+		timeout:  DefaultTimeout,
 		selector: ss,
 		freeconn: make(map[string]chan *conn),
 	}
@@ -209,14 +210,25 @@ func NewFromSelector(ss ServerSelector) *Client {
 // Client is a memcache client.
 // It is safe for unlocked use by multiple concurrent goroutines.
 type Client struct {
-	// Timeout specifies the socket read/write timeout.
-	// If zero, DefaultTimeout is used.
-	Timeout time.Duration
-
+	timeout  time.Duration
 	selector ServerSelector
-
 	mu       sync.RWMutex
 	freeconn map[string]chan *conn
+}
+
+// Timeout returns the socket read/write timeout. By default, it's
+// DefaultTimeout.
+func (c *Client) Timeout() time.Duration {
+	return c.timeout
+}
+
+// SetTimeout specifies the socket read/write timeout.
+// If zero, DefaultTimeout is used.
+func (c *Client) SetTimeout(timeout time.Duration) {
+	if timeout == time.Duration(0) {
+		timeout = DefaultTimeout
+	}
+	c.timeout = timeout
 }
 
 // Item is an item to be got or stored in a memcached server.
@@ -256,7 +268,7 @@ func (cn *conn) release() {
 }
 
 func (cn *conn) extendDeadline() {
-	cn.nc.SetDeadline(time.Now().Add(cn.c.netTimeout()))
+	cn.nc.SetDeadline(time.Now().Add(cn.c.timeout))
 }
 
 // condRelease releases this connection if the error pointed to by err
@@ -310,13 +322,6 @@ func (c *Client) getFreeConn(addr net.Addr) (cn *conn, ok bool) {
 	}
 }
 
-func (c *Client) netTimeout() time.Duration {
-	if c.Timeout != 0 {
-		return c.Timeout
-	}
-	return DefaultTimeout
-}
-
 // ConnectTimeoutError is the error type used when it takes
 // too long to connect to the desired host. This level of
 // detail can generally be ignored.
@@ -341,7 +346,7 @@ func (c *Client) dial(addr net.Addr) (net.Conn, error) {
 	select {
 	case ce := <-ch:
 		return ce.cn, ce.err
-	case <-time.After(c.netTimeout()):
+	case <-time.After(c.timeout):
 		// Too slow. Fall through.
 	}
 	// Close the conn if it does end up finally coming in
