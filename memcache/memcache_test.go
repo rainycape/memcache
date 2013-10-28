@@ -105,9 +105,9 @@ func testWithClient(t *testing.T, c *Client) {
 	// Add
 	bar := &Item{Key: "bar", Value: []byte("barval")}
 	err = c.Add(bar)
-	checkErr(err, "first add(foo): %v", err)
+	checkErr(err, "first add(bar): %v", err)
 	if err := c.Add(bar); err != ErrNotStored {
-		t.Fatalf("second add(foo) want ErrNotStored, got %v", err)
+		t.Fatalf("second add(bar) want ErrNotStored, got %v", err)
 	}
 
 	// GetMulti
