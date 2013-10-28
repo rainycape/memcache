@@ -22,7 +22,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 )
@@ -162,8 +161,8 @@ func testWithClient(t *testing.T, c *Client) {
 	}
 	mustSet(&Item{Key: "num", Value: []byte("not-numeric")})
 	n, err = c.Increment("num", 1)
-	if err == nil || !strings.Contains(err.Error(), "client error") {
-		t.Fatalf("increment non-number: want client error, got %v", err)
+	if err != ErrBadIncrDec {
+		t.Fatalf("increment non-number: want %v, got %v", ErrBadIncrDec, err)
 	}
 
 }

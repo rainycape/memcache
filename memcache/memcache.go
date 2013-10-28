@@ -18,16 +18,11 @@ limitations under the License.
 package memcache
 
 import (
-	"bufio"
-	"bytes"
+	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"net"
-
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -62,6 +57,12 @@ var (
 
 	// ErrNoServers is returned when no servers are configured or available.
 	ErrNoServers = errors.New("memcache: no servers configured or available")
+
+	// ErrBadMagic is returned when the magic number in a response is not valid.
+	ErrBadMagic = errors.New("memcache: bad magic number in response")
+
+	// ErrBadIncrDec is returned when performing a incr/decr on non-numeric values.
+	ErrBadIncrDec = errors.New("memcache: incr or decr on non-numeric value")
 )
 
 // DefaultTimeout is the default socket read/write timeout.
@@ -72,13 +73,103 @@ const (
 	maxIdleConnsPerAddr = 2 // TODO(bradfitz): make this configurable?
 )
 
+var (
+	zero8  = []byte{0}
+	zero16 = []byte{0, 0}
+	zero32 = []byte{0, 0, 0, 0}
+	zero64 = []byte{0, 0, 0, 0, 0, 0, 0, 0}
+)
+
+type command uint8
+
+const (
+	cmdGet = iota
+	cmdSet
+	cmdAdd
+	cmdReplace
+	cmdDelete
+	cmdIncr
+	cmdDecr
+	cmdQuit
+	cmdFlush
+	cmdGetQ
+	cmdNoop
+	cmdVersion
+	cmdGetK
+	cmdGetKQ
+)
+
+type response uint16
+
+const (
+	respOk = iota
+	respKeyNotFound
+	respKeyExists
+	respValueTooLarge
+	respInvalidArgs
+	respItemNotStored
+	respInvalidIncrDecr
+	respWrongVBucket
+	respAuthErr
+	respAuthContinue
+	respUnknownCmd   = 0x81
+	respOOM          = 0x82
+	respNotSupported = 0x83
+	respInternalErr  = 0x85
+	respBusy         = 0x85
+	respTemporaryErr = 0x86
+)
+
+func (r response) asError() error {
+	switch r {
+	case respKeyNotFound:
+		return ErrCacheMiss
+	case respKeyExists:
+		return ErrNotStored
+	case respInvalidIncrDecr:
+		return ErrBadIncrDec
+	}
+	return r
+}
+
+func (r response) Error() string {
+	switch r {
+	case respOk:
+		return "Ok"
+	case respKeyNotFound:
+		return "key not found"
+	case respKeyExists:
+		return "key already exists"
+	case respValueTooLarge:
+		return "value too large"
+	case respInvalidArgs:
+		return "invalid arguments"
+	case respItemNotStored:
+		return "item not stored"
+	case respInvalidIncrDecr:
+		return "incr/decr on non-numeric value"
+	case respWrongVBucket:
+		return "wrong vbucket"
+	case respAuthErr:
+		return "auth error"
+	case respAuthContinue:
+		return "auth continue"
+	}
+	return ""
+}
+
+const (
+	reqMagic  uint8 = 0x80
+	respMagic uint8 = 0x81
+)
+
 // resumableError returns true if err is only a protocol-level cache error.
 // This is used to determine whether or not a server connection should
 // be re-used or not. If an error occurs, by default we don't reuse the
 // connection, unless it was just a cache error.
 func resumableError(err error) bool {
 	switch err {
-	case ErrCacheMiss, ErrCASConflict, ErrNotStored, ErrMalformedKey:
+	case ErrCacheMiss, ErrCASConflict, ErrNotStored, ErrMalformedKey, ErrBadIncrDec:
 		return true
 	}
 	return false
@@ -95,19 +186,6 @@ func legalKey(key string) bool {
 	}
 	return true
 }
-
-var (
-	crlf            = []byte("\r\n")
-	space           = []byte(" ")
-	resultStored    = []byte("STORED\r\n")
-	resultNotStored = []byte("NOT_STORED\r\n")
-	resultExists    = []byte("EXISTS\r\n")
-	resultNotFound  = []byte("NOT_FOUND\r\n")
-	resultDeleted   = []byte("DELETED\r\n")
-	resultEnd       = []byte("END\r\n")
-
-	resultClientErrorPrefix = []byte("CLIENT_ERROR ")
-)
 
 // New returns a memcache client using the provided server(s)
 // with equal weight. If a server is listed multiple times,
@@ -163,7 +241,6 @@ type Item struct {
 // conn is a connection to a server.
 type conn struct {
 	nc   net.Conn
-	rw   *bufio.ReadWriter
 	addr net.Addr
 	c    *Client
 }
@@ -185,6 +262,12 @@ func (cn *conn) condRelease(err *error) {
 	if *err == nil || resumableError(*err) {
 		cn.release()
 	} else {
+		cn.nc.Close()
+	}
+}
+
+func (cn *conn) condClose(err *error) {
+	if *err != nil {
 		cn.nc.Close()
 	}
 }
@@ -264,91 +347,182 @@ func (c *Client) dial(addr net.Addr) (net.Conn, error) {
 
 func (c *Client) getConn(addr net.Addr) (*conn, error) {
 	cn, ok := c.getFreeConn(addr)
-	if ok {
-		cn.extendDeadline()
-		return cn, nil
-	}
-	nc, err := c.dial(addr)
-	if err != nil {
-		return nil, err
-	}
-	cn = &conn{
-		nc:   nc,
-		addr: addr,
-		rw:   bufio.NewReadWriter(bufio.NewReader(nc), bufio.NewWriter(nc)),
-		c:    c,
+	if !ok {
+		nc, err := c.dial(addr)
+		if err != nil {
+			return nil, err
+		}
+		cn = &conn{
+			nc:   nc,
+			addr: addr,
+			c:    c,
+		}
 	}
 	cn.extendDeadline()
 	return cn, nil
 }
 
-func (c *Client) onItem(item *Item, fn func(*Client, *bufio.ReadWriter, *Item) error) error {
-	addr, err := c.selector.PickServer(item.Key)
+// Get gets the item for the given key. ErrCacheMiss is returned for a
+// memcache cache miss. The key must be at most 250 bytes in length.
+func (c *Client) Get(key string) (*Item, error) {
+	cn, err := c.sendCommand(key, cmdGet, nil, nil)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	return c.parseItemResponse(key, cn, true)
+}
+
+func (c *Client) sendCommand(key string, cmd command, item *Item, extras []byte) (*conn, error) {
+	if !legalKey(key) {
+		return nil, ErrMalformedKey
+	}
+	addr, err := c.selector.PickServer(key)
+	if err != nil {
+		return nil, err
 	}
 	cn, err := c.getConn(addr)
 	if err != nil {
+		return nil, err
+	}
+	defer cn.condClose(&err)
+	err = c.sendConnCommand(cn, key, cmd, item, extras)
+	return cn, err
+}
+
+func (c *Client) sendConnCommand(cn *conn, key string, cmd command, item *Item, extras []byte) (err error) {
+	if _, err = cn.nc.Write([]byte{reqMagic, byte(cmd)}); err != nil {
 		return err
 	}
-	defer cn.condRelease(&err)
-	if err = fn(c, cn.rw, item); err != nil {
+	kl := len(key)
+	el := len(extras)
+	// Key length
+	if err = binary.Write(cn.nc, binary.BigEndian, uint16(kl)); err != nil {
 		return err
+	}
+	// Extras length and data type
+	if _, err = cn.nc.Write([]byte{byte(el), 0}); err != nil {
+		return err
+	}
+	// VBucket
+	if _, err = cn.nc.Write(zero16); err != nil {
+		return err
+	}
+	// Total body length
+	bl := uint32(kl + el)
+	if item != nil {
+		bl += uint32(len(item.Value))
+	}
+	if err = binary.Write(cn.nc, binary.BigEndian, bl); err != nil {
+		return err
+	}
+	// Opaque
+	if _, err = cn.nc.Write(zero32); err != nil {
+		return err
+	}
+	// CAS
+	if item != nil && item.casid != 0 {
+		if err = binary.Write(cn.nc, binary.BigEndian, item.casid); err != nil {
+			return err
+		}
+	} else {
+		if _, err = cn.nc.Write(zero64); err != nil {
+			return err
+		}
+	}
+	// Extras
+	if el > 0 {
+		if _, err = cn.nc.Write(extras); err != nil {
+			return err
+		}
+	}
+	if kl > 0 {
+		// Key itself
+		if _, err = cn.nc.Write([]byte(key)); err != nil {
+			return err
+		}
+	}
+	if item != nil {
+		if _, err = cn.nc.Write(item.Value); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-// Get gets the item for the given key. ErrCacheMiss is returned for a
-// memcache cache miss. The key must be at most 250 bytes in length.
-func (c *Client) Get(key string) (item *Item, err error) {
-	err = c.withKeyAddr(key, func(addr net.Addr) error {
-		return c.getFromAddr(addr, []string{key}, func(it *Item) { item = it })
-	})
-	if err == nil && item == nil {
-		err = ErrCacheMiss
+func (c *Client) parseResponse(cn *conn) ([]byte, []byte, []byte, []byte, error) {
+	var err error
+	hdr := make([]byte, 24)
+	if _, err = cn.nc.Read(hdr); err != nil {
+		return nil, nil, nil, nil, err
 	}
-	return
+	if hdr[0] != respMagic {
+		return nil, nil, nil, nil, ErrBadMagic
+	}
+	total := int(binary.BigEndian.Uint32(hdr[8:12]))
+	status := binary.BigEndian.Uint16(hdr[6:8])
+	if status != respOk {
+		if _, err = io.CopyN(ioutil.Discard, cn.nc, int64(total)); err != nil {
+			return nil, nil, nil, nil, err
+		}
+		return nil, nil, nil, nil, response(status).asError()
+	}
+	var extras []byte
+	el := int(hdr[4])
+	if el > 0 {
+		extras = make([]byte, el)
+		if _, err = cn.nc.Read(extras); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	var key []byte
+	kl := int(binary.BigEndian.Uint16(hdr[2:4]))
+	if kl > 0 {
+		key = make([]byte, int(kl))
+		if _, err = cn.nc.Read(key); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	var body []byte
+	bl := total - el - kl
+	if bl > 0 {
+		body = make([]byte, bl)
+		if _, err = cn.nc.Read(body); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	return hdr, key, extras, body, nil
 }
 
-func (c *Client) withKeyAddr(key string, fn func(net.Addr) error) (err error) {
-	if !legalKey(key) {
-		return ErrMalformedKey
-	}
-	addr, err := c.selector.PickServer(key)
+func (c *Client) parseUintResponse(cn *conn) (uint64, error) {
+	_, _, _, body, err := c.parseResponse(cn)
+	cn.condRelease(&err)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return fn(addr)
+	return binary.BigEndian.Uint64(body), nil
 }
 
-func (c *Client) withAddrRw(addr net.Addr, fn func(*bufio.ReadWriter) error) (err error) {
-	cn, err := c.getConn(addr)
+func (c *Client) parseItemResponse(key string, cn *conn, release bool) (*Item, error) {
+	hdr, k, extras, body, err := c.parseResponse(cn)
+	if release {
+		cn.condRelease(&err)
+	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer cn.condRelease(&err)
-	return fn(cn.rw)
-}
-
-func (c *Client) withKeyRw(key string, fn func(*bufio.ReadWriter) error) error {
-	return c.withKeyAddr(key, func(addr net.Addr) error {
-		return c.withAddrRw(addr, fn)
-	})
-}
-
-func (c *Client) getFromAddr(addr net.Addr, keys []string, cb func(*Item)) error {
-	return c.withAddrRw(addr, func(rw *bufio.ReadWriter) error {
-		if _, err := fmt.Fprintf(rw, "gets %s\r\n", strings.Join(keys, " ")); err != nil {
-			return err
-		}
-		if err := rw.Flush(); err != nil {
-			return err
-		}
-		if err := parseGetResponse(rw.Reader, cb); err != nil {
-			return err
-		}
-		return nil
-	})
+	var flags uint32
+	if len(extras) > 0 {
+		flags = binary.BigEndian.Uint32(extras)
+	}
+	if key == "" && len(k) > 0 {
+		key = string(k)
+	}
+	return &Item{
+		Key:   key,
+		Value: body,
+		Flags: flags,
+		casid: binary.BigEndian.Uint64(hdr[16:24]),
+	}, nil
 }
 
 // GetMulti is a batch version of Get. The returned map from keys to
@@ -356,14 +530,6 @@ func (c *Client) getFromAddr(addr net.Addr, keys []string, cb func(*Item)) error
 // cache misses. Each key must be at most 250 bytes in length.
 // If no error is returned, the returned map will also be non-nil.
 func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
-	var lk sync.Mutex
-	m := make(map[string]*Item)
-	addItemToMap := func(it *Item) {
-		lk.Lock()
-		defer lk.Unlock()
-		m[it.Key] = it
-	}
-
 	keyMap := make(map[net.Addr][]string)
 	for _, key := range keys {
 		if !legalKey(key) {
@@ -376,84 +542,56 @@ func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
 		keyMap[addr] = append(keyMap[addr], key)
 	}
 
-	ch := make(chan error, buffered)
+	var chs []chan *Item
 	for addr, keys := range keyMap {
-		go func(addr net.Addr, keys []string) {
-			ch <- c.getFromAddr(addr, keys, addItemToMap)
-		}(addr, keys)
+		ch := make(chan *Item)
+		chs = append(chs, ch)
+		go func(addr net.Addr, keys []string, ch chan *Item) {
+			defer close(ch)
+			cn, err := c.getConn(addr)
+			if err != nil {
+				return
+			}
+			defer cn.condRelease(&err)
+			for _, k := range keys {
+				if err = c.sendConnCommand(cn, k, cmdGetKQ, nil, nil); err != nil {
+					return
+				}
+			}
+			if err = c.sendConnCommand(cn, "", cmdNoop, nil, nil); err != nil {
+				return
+			}
+			var item *Item
+			for {
+				item, err = c.parseItemResponse("", cn, false)
+				if item == nil || item.Key == "" {
+					// Noop response
+					break
+				}
+				ch <- item
+			}
+		}(addr, keys, ch)
 	}
 
+	m := make(map[string]*Item)
 	var err error
-	for _ = range keyMap {
-		if ge := <-ch; ge != nil {
-			err = ge
+	for _, ch := range chs {
+		for item := range ch {
+			m[item.Key] = item
 		}
 	}
 	return m, err
 }
 
-// parseGetResponse reads a GET response from r and calls cb for each
-// read and allocated Item
-func parseGetResponse(r *bufio.Reader, cb func(*Item)) error {
-	for {
-		line, err := r.ReadSlice('\n')
-		if err != nil {
-			return err
-		}
-		if bytes.Equal(line, resultEnd) {
-			return nil
-		}
-		it := new(Item)
-		size, err := scanGetResponseLine(line, it)
-		if err != nil {
-			return err
-		}
-		it.Value, err = ioutil.ReadAll(io.LimitReader(r, int64(size)+2))
-		if err != nil {
-			return err
-		}
-		if !bytes.HasSuffix(it.Value, crlf) {
-			return fmt.Errorf("memcache: corrupt get result read")
-		}
-		it.Value = it.Value[:size]
-		cb(it)
-	}
-	panic("unreached")
-}
-
-// scanGetResponseLine populates it and returns the declared size of the item.
-// It does not read the bytes of the item.
-func scanGetResponseLine(line []byte, it *Item) (size int, err error) {
-	pattern := "VALUE %s %d %d %d\r\n"
-	dest := []interface{}{&it.Key, &it.Flags, &size, &it.casid}
-	if bytes.Count(line, space) == 3 {
-		pattern = "VALUE %s %d %d\r\n"
-		dest = dest[:3]
-	}
-	n, err := fmt.Sscanf(string(line), pattern, dest...)
-	if err != nil || n != len(dest) {
-		return -1, fmt.Errorf("memcache: unexpected line in get response: %q", line)
-	}
-	return size, nil
-}
-
 // Set writes the given item, unconditionally.
 func (c *Client) Set(item *Item) error {
-	return c.onItem(item, (*Client).set)
-}
-
-func (c *Client) set(rw *bufio.ReadWriter, item *Item) error {
-	return c.populateOne(rw, "set", item)
+	return c.populateOne(cmdSet, item, false)
 }
 
 // Add writes the given item, if no value already exists for its
 // key. ErrNotStored is returned if that condition is not met.
 func (c *Client) Add(item *Item) error {
-	return c.onItem(item, (*Client).add)
-}
-
-func (c *Client) add(rw *bufio.ReadWriter, item *Item) error {
-	return c.populateOne(rw, "add", item)
+	return c.populateOne(cmdAdd, item, false)
 }
 
 // CompareAndSwap writes the given item that was previously returned
@@ -464,90 +602,46 @@ func (c *Client) add(rw *bufio.ReadWriter, item *Item) error {
 // calls. ErrNotStored is returned if the value was evicted in between
 // the calls.
 func (c *Client) CompareAndSwap(item *Item) error {
-	return c.onItem(item, (*Client).cas)
+	return c.populateOne(cmdSet, item, true)
 }
 
-func (c *Client) cas(rw *bufio.ReadWriter, item *Item) error {
-	return c.populateOne(rw, "cas", item)
+func (c *Client) cas(nc net.Conn, item *Item) error {
+	return c.populateOne(cmdSet, item, true)
 }
 
-func (c *Client) populateOne(rw *bufio.ReadWriter, verb string, item *Item) error {
-	if !legalKey(item.Key) {
+func (c *Client) populateOne(cmd command, item *Item, cas bool) error {
+	if item == nil || !legalKey(item.Key) {
 		return ErrMalformedKey
 	}
-	var err error
-	if verb == "cas" {
-		_, err = fmt.Fprintf(rw, "%s %s %d %d %d %d\r\n",
-			verb, item.Key, item.Flags, item.Expiration, len(item.Value), item.casid)
-	} else {
-		_, err = fmt.Fprintf(rw, "%s %s %d %d %d\r\n",
-			verb, item.Key, item.Flags, item.Expiration, len(item.Value))
+	extras := make([]byte, 8)
+	binary.BigEndian.PutUint32(extras, item.Flags)
+	binary.BigEndian.PutUint32(extras[4:8], uint32(item.Expiration))
+	if !cas && item.casid != 0 {
+		item.casid = 0
 	}
+	cn, err := c.sendCommand(item.Key, cmd, item, extras)
 	if err != nil {
 		return err
 	}
-	if _, err = rw.Write(item.Value); err != nil {
-		return err
-	}
-	if _, err := rw.Write(crlf); err != nil {
-		return err
-	}
-	if err := rw.Flush(); err != nil {
-		return err
-	}
-	line, err := rw.ReadSlice('\n')
+	hdr, _, _, _, err := c.parseResponse(cn)
+	cn.condRelease(&err)
 	if err != nil {
 		return err
 	}
-	switch {
-	case bytes.Equal(line, resultStored):
-		return nil
-	case bytes.Equal(line, resultNotStored):
-		return ErrNotStored
-	case bytes.Equal(line, resultExists):
-		return ErrCASConflict
-	case bytes.Equal(line, resultNotFound):
-		return ErrCacheMiss
-	}
-	return fmt.Errorf("memcache: unexpected response line from %q: %q", verb, string(line))
-}
-
-func writeReadLine(rw *bufio.ReadWriter, format string, args ...interface{}) ([]byte, error) {
-	_, err := fmt.Fprintf(rw, format, args...)
-	if err != nil {
-		return nil, err
-	}
-	if err := rw.Flush(); err != nil {
-		return nil, err
-	}
-	line, err := rw.ReadSlice('\n')
-	return line, err
-}
-
-func writeExpectf(rw *bufio.ReadWriter, expect []byte, format string, args ...interface{}) error {
-	line, err := writeReadLine(rw, format, args...)
-	if err != nil {
-		return err
-	}
-	switch {
-	case bytes.Equal(line, expect):
-		return nil
-	case bytes.Equal(line, resultNotStored):
-		return ErrNotStored
-	case bytes.Equal(line, resultExists):
-		return ErrCASConflict
-	case bytes.Equal(line, resultNotFound):
-		return ErrCacheMiss
-	}
-	return fmt.Errorf("memcache: unexpected response line: %q", string(line))
+	item.casid = binary.BigEndian.Uint64(hdr[16:24])
+	return nil
 }
 
 // Delete deletes the item with the provided key. The error ErrCacheMiss is
 // returned if the item didn't already exist in the cache.
 func (c *Client) Delete(key string) error {
-	return c.withKeyRw(key, func(rw *bufio.ReadWriter) error {
-		return writeExpectf(rw, resultDeleted, "delete %s\r\n", key)
-	})
+	cn, err := c.sendCommand(key, cmdDelete, nil, nil)
+	if err != nil {
+		return err
+	}
+	_, _, _, _, err = c.parseResponse(cn)
+	cn.condRelease(&err)
+	return err
 }
 
 // Increment atomically increments key by delta. The return value is
@@ -556,7 +650,7 @@ func (c *Client) Delete(key string) error {
 // memcached must be an decimal number, or an error will be returned.
 // On 64-bit overflow, the new value wraps around.
 func (c *Client) Increment(key string, delta uint64) (newValue uint64, err error) {
-	return c.incrDecr("incr", key, delta)
+	return c.incrDecr(cmdIncr, key, delta)
 }
 
 // Decrement atomically decrements key by delta. The return value is
@@ -566,28 +660,20 @@ func (c *Client) Increment(key string, delta uint64) (newValue uint64, err error
 // On underflow, the new value is capped at zero and does not wrap
 // around.
 func (c *Client) Decrement(key string, delta uint64) (newValue uint64, err error) {
-	return c.incrDecr("decr", key, delta)
+	return c.incrDecr(cmdDecr, key, delta)
 }
 
-func (c *Client) incrDecr(verb, key string, delta uint64) (uint64, error) {
-	var val uint64
-	err := c.withKeyRw(key, func(rw *bufio.ReadWriter) error {
-		line, err := writeReadLine(rw, "%s %s %d\r\n", verb, key, delta)
-		if err != nil {
-			return err
-		}
-		switch {
-		case bytes.Equal(line, resultNotFound):
-			return ErrCacheMiss
-		case bytes.HasPrefix(line, resultClientErrorPrefix):
-			errMsg := line[len(resultClientErrorPrefix) : len(line)-2]
-			return errors.New("memcache: client error: " + string(errMsg))
-		}
-		val, err = strconv.ParseUint(string(line[:len(line)-2]), 10, 64)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	return val, err
+func (c *Client) incrDecr(cmd command, key string, delta uint64) (uint64, error) {
+	extras := make([]byte, 20)
+	binary.BigEndian.PutUint64(extras, delta)
+	// Set expiration to 0xfffffff, so the command fails if the key
+	// does not exist.
+	for ii := 16; ii < 20; ii++ {
+		extras[ii] = 0xff
+	}
+	cn, err := c.sendCommand(key, cmd, nil, extras)
+	if err != nil {
+		return 0, err
+	}
+	return c.parseUintResponse(cn)
 }
