@@ -583,13 +583,12 @@ func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
 	}
 
 	m := make(map[string]*Item)
-	var err error
 	for _, ch := range chs {
 		for item := range ch {
 			m[item.Key] = item
 		}
 	}
-	return m, err
+	return m, nil
 }
 
 // Set writes the given item, unconditionally.
