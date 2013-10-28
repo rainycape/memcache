@@ -451,7 +451,7 @@ func (c *Client) sendConnCommand(cn *conn, key string, cmd command, item *Item, 
 	}
 	if kl > 0 {
 		// Key itself
-		if _, err = cn.nc.Write([]byte(key)); err != nil {
+		if _, err = cn.nc.Write(stobs(key)); err != nil {
 			return err
 		}
 	}
