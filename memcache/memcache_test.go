@@ -132,7 +132,7 @@ func testWithClient(t *testing.T, c *Client) {
 	// Delete
 	err = c.Delete("foo")
 	checkErr(err, "Delete: %v", err)
-	it, err = c.Get("foo")
+	_, err = c.Get("foo")
 	if err != ErrCacheMiss {
 		t.Errorf("post-Delete want ErrCacheMiss, got %v", err)
 	}
