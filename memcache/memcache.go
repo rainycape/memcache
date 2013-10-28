@@ -200,7 +200,10 @@ func New(server ...string) *Client {
 
 // NewFromSelector returns a new Client using the provided ServerSelector.
 func NewFromSelector(ss ServerSelector) *Client {
-	return &Client{selector: ss}
+	return &Client{
+		selector: ss,
+		freeconn: make(map[string]chan *conn),
+	}
 }
 
 // Client is a memcache client.
@@ -212,8 +215,8 @@ type Client struct {
 
 	selector ServerSelector
 
-	lk       sync.Mutex
-	freeconn map[string][]*conn
+	mu       sync.RWMutex
+	freeconn map[string]chan *conn
 }
 
 // Item is an item to be got or stored in a memcached server.
@@ -275,32 +278,36 @@ func (cn *conn) condClose(err *error) {
 }
 
 func (c *Client) putFreeConn(addr net.Addr, cn *conn) {
-	c.lk.Lock()
-	defer c.lk.Unlock()
-	if c.freeconn == nil {
-		c.freeconn = make(map[string][]*conn)
-	}
+	c.mu.RLock()
 	freelist := c.freeconn[addr.String()]
-	if len(freelist) >= maxIdleConnsPerAddr {
-		cn.nc.Close()
-		return
+	c.mu.RUnlock()
+	if freelist == nil {
+		freelist = make(chan *conn, maxIdleConnsPerAddr)
+		c.mu.Lock()
+		c.freeconn[addr.String()] = freelist
+		c.mu.Unlock()
 	}
-	c.freeconn[addr.String()] = append(freelist, cn)
+	select {
+	case freelist <- cn:
+		break
+	default:
+		cn.nc.Close()
+	}
 }
 
 func (c *Client) getFreeConn(addr net.Addr) (cn *conn, ok bool) {
-	c.lk.Lock()
-	defer c.lk.Unlock()
-	if c.freeconn == nil {
+	c.mu.RLock()
+	freelist := c.freeconn[addr.String()]
+	c.mu.RUnlock()
+	if freelist == nil {
 		return nil, false
 	}
-	freelist, ok := c.freeconn[addr.String()]
-	if !ok || len(freelist) == 0 {
+	select {
+	case cn := <-freelist:
+		return cn, true
+	default:
 		return nil, false
 	}
-	cn = freelist[len(freelist)-1]
-	c.freeconn[addr.String()] = freelist[:len(freelist)-1]
-	return cn, true
 }
 
 func (c *Client) netTimeout() time.Duration {
