@@ -47,16 +47,14 @@ func TestLocalhost(t *testing.T) {
 	testWithClient(t, New(testServer))
 }
 
-// Run the memcached binary as a child process and connect to its unix socket.
-func TestUnixSocket(t *testing.T) {
+func newUnixServer(tb testing.TB) (*exec.Cmd, *Client) {
 	sock := fmt.Sprintf("/tmp/test-gomemcache-%d.sock", os.Getpid())
+	os.Remove(sock)
 	cmd := exec.Command("memcached", "-s", sock)
 	if err := cmd.Start(); err != nil {
-		t.Logf("skipping test; couldn't find memcached")
-		return
+		tb.Skip("skipping test; couldn't find memcached")
+		return nil, nil
 	}
-	defer cmd.Wait()
-	defer cmd.Process.Kill()
 
 	// Wait a bit for the socket to appear.
 	for i := 0; i < 10; i++ {
@@ -65,8 +63,15 @@ func TestUnixSocket(t *testing.T) {
 		}
 		time.Sleep(time.Duration(25*i) * time.Millisecond)
 	}
+	return cmd, New(sock)
+}
 
-	testWithClient(t, New(sock))
+// Run the memcached binary as a child process and connect to its unix socket.
+func TestUnixSocket(t *testing.T) {
+	cmd, c := newUnixServer(t)
+	defer cmd.Wait()
+	defer cmd.Process.Kill()
+	testWithClient(t, c)
 }
 
 func testWithClient(t *testing.T, c *Client) {
