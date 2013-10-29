@@ -270,7 +270,7 @@ type Item struct {
 // conn is a connection to a server.
 type conn struct {
 	nc   net.Conn
-	addr net.Addr
+	addr *Addr
 	c    *Client
 }
 
