@@ -87,6 +87,10 @@ func BenchmarkConcurrentSetGetLarge10_100(b *testing.B) {
 	benchmarkConcurrentSetGet(b, largeItem(), 10, 100)
 }
 
-func BenchmarkConcurrentSetGetLarge50(b *testing.B) {
-	benchmarkConcurrentSetGet(b, largeItem(), 50, 1000)
+func BenchmarkConcurrentSetGetSmall20_100(b *testing.B) {
+	benchmarkConcurrentSetGet(b, smallItem(), 20, 100)
+}
+
+func BenchmarkConcurrentSetGetLarge20_100(b *testing.B) {
+	benchmarkConcurrentSetGet(b, largeItem(), 20, 100)
 }
