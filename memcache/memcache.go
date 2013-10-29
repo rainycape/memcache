@@ -211,21 +211,23 @@ func New(server ...string) *Client {
 // NewFromSelector returns a new Client using the provided ServerSelector.
 func NewFromSelector(ss ServerSelector) *Client {
 	return &Client{
-		timeout:  DefaultTimeout,
-		selector: ss,
-		freeconn: make(map[string]chan *conn),
-		bufPool:  make(chan *bytes.Buffer, poolSize()),
+		timeout:        DefaultTimeout,
+		maxIdlePerAddr: maxIdleConnsPerAddr,
+		selector:       ss,
+		freeconn:       make(map[string]chan *conn),
+		bufPool:        make(chan *bytes.Buffer, poolSize()),
 	}
 }
 
 // Client is a memcache client.
 // It is safe for unlocked use by multiple concurrent goroutines.
 type Client struct {
-	timeout  time.Duration
-	selector ServerSelector
-	mu       sync.RWMutex
-	freeconn map[string]chan *conn
-	bufPool  chan *bytes.Buffer
+	timeout        time.Duration
+	maxIdlePerAddr int
+	selector       ServerSelector
+	mu             sync.RWMutex
+	freeconn       map[string]chan *conn
+	bufPool        chan *bytes.Buffer
 }
 
 // Timeout returns the socket read/write timeout. By default, it's
@@ -241,6 +243,53 @@ func (c *Client) SetTimeout(timeout time.Duration) {
 		timeout = DefaultTimeout
 	}
 	c.timeout = timeout
+}
+
+// MaxIdleConnsPerAddr returns the maximum number of idle
+// connections kept per server address.
+func (c *Client) MaxIdleConnsPerAddr() int {
+	return c.maxIdlePerAddr
+}
+
+// SetMaxIdleConnsPerAddr changes the maximum number of
+// idle connections kept per server. If maxIdle < 0,
+// no idle connections are kept. If maxIdle == 0,
+// the default number (currently 2) is used.
+func (c *Client) SetMaxIdleConnsPerAddr(maxIdle int) {
+	if maxIdle == 0 {
+		maxIdle = maxIdleConnsPerAddr
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.maxIdlePerAddr = maxIdle
+	if maxIdle > 0 {
+		freeconn := make(map[string]chan *conn)
+		for k, v := range c.freeconn {
+			ch := make(chan *conn, maxIdle)
+			for cn := range v {
+				select {
+				case ch <- cn:
+				default:
+					cn.nc.Close()
+				}
+			}
+			freeconn[k] = v
+		}
+		c.freeconn = freeconn
+	} else {
+		c.closeIdleConns()
+		c.freeconn = nil
+	}
+}
+
+// Close closes all currently open connections.
+func (c *Client) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closeIdleConns()
+	c.freeconn = nil
+	c.maxIdlePerAddr = 0
+	return nil
 }
 
 // Item is an item to be got or stored in a memcached server.
@@ -301,12 +350,21 @@ func (cn *conn) condClose(err *error) {
 	}
 }
 
+func (c *Client) closeIdleConns() {
+	for _, v := range c.freeconn {
+		for cn := range v {
+			cn.nc.Close()
+		}
+	}
+}
+
 func (c *Client) putFreeConn(addr net.Addr, cn *conn) {
 	c.mu.RLock()
 	freelist := c.freeconn[addr.String()]
+	maxIdle := c.maxIdlePerAddr
 	c.mu.RUnlock()
-	if freelist == nil {
-		freelist = make(chan *conn, maxIdleConnsPerAddr)
+	if freelist == nil && maxIdle > 0 {
+		freelist = make(chan *conn, maxIdle)
 		c.mu.Lock()
 		c.freeconn[addr.String()] = freelist
 		c.mu.Unlock()
