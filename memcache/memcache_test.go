@@ -28,22 +28,25 @@ import (
 
 const testServer = "localhost:11211"
 
-func setup(t *testing.T) bool {
+func (c *Client) totalOpen() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	count := 0
+	for _, v := range c.freeconn {
+		count += len(v)
+	}
+	return count
+}
+
+func newLocalhostServer(tb testing.TB) *Client {
 	c, err := net.Dial("tcp", testServer)
 	if err != nil {
-		t.Logf("skipping test; no server running at %s", testServer)
-		return false
+		tb.Skip("skipping test; no server running at %s", testServer)
+		return nil
 	}
 	c.Write([]byte("flush_all\r\n"))
 	c.Close()
-	return true
-}
-
-func TestLocalhost(t *testing.T) {
-	if !setup(t) {
-		return
-	}
-	testWithClient(t, New(testServer))
+	return New(testServer)
 }
 
 func newUnixServer(tb testing.TB) (*exec.Cmd, *Client) {
@@ -63,6 +66,10 @@ func newUnixServer(tb testing.TB) (*exec.Cmd, *Client) {
 		time.Sleep(time.Duration(25*i) * time.Millisecond)
 	}
 	return cmd, New(sock)
+}
+
+func TestLocalhost(t *testing.T) {
+	testWithClient(t, newLocalhostServer(t))
 }
 
 // Run the memcached binary as a child process and connect to its unix socket.
