@@ -10,6 +10,7 @@ import (
 func benchmarkSetGet(b *testing.B, item *Item) {
 	cmd, c := newUnixServer(b)
 	key := item.Key
+	b.SetBytes(int64(len(item.Key) + len(item.Value)))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if err := c.Set(item); err != nil {
@@ -53,6 +54,7 @@ func benchmarkConcurrentSetGet(b *testing.B, item *Item, count int, opcount int)
 	for ii := range items {
 		items[ii] = &Item{Key: item.Key, Value: item.Value}
 	}
+	b.SetBytes(int64((len(item.Key) + len(item.Value)) * count * opcount))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var wg sync.WaitGroup
