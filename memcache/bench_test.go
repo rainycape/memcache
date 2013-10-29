@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func benchmarkSetGet(b *testing.B, item *Item) {
@@ -49,6 +50,7 @@ func benchmarkConcurrentSetGet(b *testing.B, item *Item, count int, opcount int)
 	runtime.GOMAXPROCS(count)
 	cmd, c := newUnixServer(b)
 	c = New("localhost:11211")
+	c.SetTimeout(250 * time.Millisecond)
 	// Items are not thread safe
 	items := make([]*Item, count)
 	for ii := range items {
