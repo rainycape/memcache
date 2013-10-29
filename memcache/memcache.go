@@ -18,11 +18,13 @@ limitations under the License.
 package memcache
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
 	"io/ioutil"
 	"net"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -189,6 +191,14 @@ func legalKey(key string) bool {
 	return true
 }
 
+func poolSize() int {
+	s := 8
+	if mp := runtime.GOMAXPROCS(0); mp > s {
+		s = mp
+	}
+	return s
+}
+
 // New returns a memcache client using the provided server(s)
 // with equal weight. If a server is listed multiple times,
 // it gets a proportional amount of weight.
@@ -204,6 +214,7 @@ func NewFromSelector(ss ServerSelector) *Client {
 		timeout:  DefaultTimeout,
 		selector: ss,
 		freeconn: make(map[string]chan *conn),
+		bufPool:  make(chan *bytes.Buffer, poolSize()),
 	}
 }
 
@@ -214,6 +225,7 @@ type Client struct {
 	selector ServerSelector
 	mu       sync.RWMutex
 	freeconn map[string]chan *conn
+	bufPool  chan *bytes.Buffer
 }
 
 // Timeout returns the socket read/write timeout. By default, it's
@@ -404,56 +416,55 @@ func (c *Client) sendCommand(key string, cmd command, item *Item, extras []byte)
 }
 
 func (c *Client) sendConnCommand(cn *conn, key string, cmd command, item *Item, extras []byte) (err error) {
-	if _, err = cn.nc.Write([]byte{reqMagic, byte(cmd)}); err != nil {
-		return err
+	var buf *bytes.Buffer
+	select {
+	case buf = <-c.bufPool:
+		buf.Reset()
+	default:
+		buf = bytes.NewBuffer(nil)
+		// 24 is header size
+		buf.Grow(24)
 	}
+	buf.WriteByte(reqMagic)
+	buf.WriteByte(byte(cmd))
 	kl := len(key)
 	el := len(extras)
 	// Key length
-	if err = binary.Write(cn.nc, binary.BigEndian, uint16(kl)); err != nil {
-		return err
-	}
-	// Extras length and data type
-	if _, err = cn.nc.Write([]byte{byte(el), 0}); err != nil {
-		return err
-	}
+	binary.Write(buf, binary.BigEndian, uint16(kl))
+	// Extras length
+	buf.WriteByte(byte(el))
+	// Data type
+	buf.WriteByte(0)
 	// VBucket
-	if _, err = cn.nc.Write(zero16); err != nil {
-		return err
-	}
+	buf.Write(zero16)
 	// Total body length
 	bl := uint32(kl + el)
 	if item != nil {
 		bl += uint32(len(item.Value))
 	}
-	if err = binary.Write(cn.nc, binary.BigEndian, bl); err != nil {
-		return err
-	}
+	binary.Write(buf, binary.BigEndian, bl)
 	// Opaque
-	if _, err = cn.nc.Write(zero32); err != nil {
-		return err
-	}
+	buf.Write(zero32)
 	// CAS
 	if item != nil && item.casid != 0 {
-		if err = binary.Write(cn.nc, binary.BigEndian, item.casid); err != nil {
-			return err
-		}
+		binary.Write(buf, binary.BigEndian, item.casid)
 	} else {
-		if _, err = cn.nc.Write(zero64); err != nil {
-			return err
-		}
+		buf.Write(zero64)
 	}
 	// Extras
 	if el > 0 {
-		if _, err = cn.nc.Write(extras); err != nil {
-			return err
-		}
+		buf.Write(extras)
 	}
 	if kl > 0 {
 		// Key itself
-		if _, err = cn.nc.Write(stobs(key)); err != nil {
-			return err
-		}
+		buf.Write(stobs(key))
+	}
+	if _, err = cn.nc.Write(buf.Bytes()); err != nil {
+		return err
+	}
+	select {
+	case c.bufPool <- buf:
+	default:
 	}
 	if item != nil {
 		if _, err = cn.nc.Write(item.Value); err != nil {
