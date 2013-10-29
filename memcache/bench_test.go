@@ -30,31 +30,40 @@ func largeItem() *Item {
 	return &Item{Key: key, Value: value}
 }
 
+func smallItem() *Item {
+	return &Item{Key: "foo", Value: []byte("bar")}
+}
+
 func BenchmarkSetGet(b *testing.B) {
-	benchmarkSetGet(b, &Item{Key: "foo", Value: []byte("bar")})
+	benchmarkSetGet(b, smallItem())
 }
 
 func BenchmarkSetGetLarge(b *testing.B) {
 	benchmarkSetGet(b, largeItem())
 }
 
-func benchmarkConcurrentSetGetLarge(b *testing.B, count int, opcount int) {
+func benchmarkConcurrentSetGet(b *testing.B, item *Item, count int, opcount int) {
 	mp := runtime.GOMAXPROCS(0)
 	defer runtime.GOMAXPROCS(mp)
 	runtime.GOMAXPROCS(count)
 	cmd, c := newUnixServer(b)
 	c = New("localhost:11211")
+	// Items are not thread safe
+	items := make([]*Item, count)
+	for ii := range items {
+		items[ii] = &Item{Key: item.Key, Value: item.Value}
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var wg sync.WaitGroup
 		wg.Add(count)
 		for j := 0; j < count; j++ {
-			item := largeItem()
-			key := item.Key
+			it := items[j]
+			key := it.Key
 			go func() {
 				defer wg.Done()
 				for k := 0; k < opcount; k++ {
-					if err := c.Set(item); err != nil {
+					if err := c.Set(it); err != nil {
 						b.Fatal(err)
 					}
 					if _, err := c.Get(key); err != nil {
@@ -70,10 +79,14 @@ func benchmarkConcurrentSetGetLarge(b *testing.B, count int, opcount int) {
 	cmd.Wait()
 }
 
-func BenchmarkConcurrentSetGetLarge10(b *testing.B) {
-	benchmarkConcurrentSetGetLarge(b, 10, 100)
+func BenchmarkConcurrentSetGetSmall10_100(b *testing.B) {
+	benchmarkConcurrentSetGet(b, smallItem(), 10, 100)
+}
+
+func BenchmarkConcurrentSetGetLarge10_100(b *testing.B) {
+	benchmarkConcurrentSetGet(b, largeItem(), 10, 100)
 }
 
 func BenchmarkConcurrentSetGetLarge50(b *testing.B) {
-	benchmarkConcurrentSetGetLarge(b, 50, 1000)
+	benchmarkConcurrentSetGet(b, largeItem(), 50, 1000)
 }
