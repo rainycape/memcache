@@ -266,14 +266,20 @@ func (c *Client) SetMaxIdleConnsPerAddr(maxIdle int) {
 		freeconn := make(map[string]chan *conn)
 		for k, v := range c.freeconn {
 			ch := make(chan *conn, maxIdle)
-			for cn := range v {
+		ChanDone:
+			for {
 				select {
-				case ch <- cn:
+				case cn := <-v:
+					select {
+					case ch <- cn:
+					default:
+						cn.nc.Close()
+					}
 				default:
-					cn.nc.Close()
+					freeconn[k] = ch
+					break ChanDone
 				}
 			}
-			freeconn[k] = v
 		}
 		c.freeconn = freeconn
 	} else {
