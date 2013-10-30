@@ -690,10 +690,6 @@ func (c *Client) CompareAndSwap(item *Item) error {
 	return c.populateOne(cmdSet, item, true)
 }
 
-func (c *Client) cas(nc net.Conn, item *Item) error {
-	return c.populateOne(cmdSet, item, true)
-}
-
 func (c *Client) populateOne(cmd command, item *Item, cas bool) error {
 	if item == nil || !legalKey(item.Key) {
 		return ErrMalformedKey
