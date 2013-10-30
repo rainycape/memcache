@@ -1,7 +1,7 @@
 ## About
 
 This is a memcache client library for the Go programming language
-(http://golang.org/). This is high performance fork of the original
+(http://golang.org/). This is a high performance fork of the original
 library at http://github.com/bradfitz/gomemcache. The following is
 a comparison between the original library and this one:
 
