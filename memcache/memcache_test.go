@@ -113,6 +113,12 @@ func testWithClient(t *testing.T, c *Client) {
 		t.Errorf("get(foo) Flags = %v, want 123", it.Flags)
 	}
 
+	// Get non-existant
+	_, err = c.Get("not-exists")
+	if err != ErrCacheMiss {
+		t.Errorf("get(not-exists): expecting %v, got %v instead", ErrCacheMiss, err)
+	}
+
 	// Add
 	bar := &Item{Key: "bar", Value: []byte("barval")}
 	err = c.Add(bar)
