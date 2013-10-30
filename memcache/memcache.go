@@ -18,7 +18,6 @@ limitations under the License.
 package memcache
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -65,6 +64,13 @@ var (
 
 	// ErrBadIncrDec is returned when performing a incr/decr on non-numeric values.
 	ErrBadIncrDec = errors.New("memcache: incr or decr on non-numeric value")
+
+	putUint16 = binary.BigEndian.PutUint16
+	putUint32 = binary.BigEndian.PutUint32
+	putUint64 = binary.BigEndian.PutUint64
+	bUint16   = binary.BigEndian.Uint16
+	bUint32   = binary.BigEndian.Uint32
+	bUint64   = binary.BigEndian.Uint64
 )
 
 // DefaultTimeout is the default socket read/write timeout.
@@ -73,13 +79,6 @@ const DefaultTimeout = time.Duration(100) * time.Millisecond
 const (
 	buffered            = 8 // arbitrary buffered channel size, for readability
 	maxIdleConnsPerAddr = 2 // TODO(bradfitz): make this configurable?
-)
-
-var (
-	zero8  = []byte{0}
-	zero16 = []byte{0, 0}
-	zero32 = []byte{0, 0, 0, 0}
-	zero64 = []byte{0, 0, 0, 0, 0, 0, 0, 0}
 )
 
 type command uint8
@@ -215,7 +214,7 @@ func NewFromSelector(ss ServerSelector) *Client {
 		maxIdlePerAddr: maxIdleConnsPerAddr,
 		selector:       ss,
 		freeconn:       make(map[string]chan *conn),
-		bufPool:        make(chan *bytes.Buffer, poolSize()),
+		bufPool:        make(chan []byte, poolSize()),
 	}
 }
 
@@ -227,7 +226,7 @@ type Client struct {
 	selector       ServerSelector
 	mu             sync.RWMutex
 	freeconn       map[string]chan *conn
-	bufPool        chan *bytes.Buffer
+	bufPool        chan []byte
 }
 
 // Timeout returns the socket read/write timeout. By default, it's
@@ -486,50 +485,48 @@ func (c *Client) sendCommand(key string, cmd command, item *Item, extras []byte)
 }
 
 func (c *Client) sendConnCommand(cn *conn, key string, cmd command, item *Item, extras []byte) (err error) {
-	var buf *bytes.Buffer
+	var buf []byte
 	select {
+	// 24 is header size
 	case buf = <-c.bufPool:
-		buf.Reset()
+		buf = buf[:24]
 	default:
-		buf = bytes.NewBuffer(nil)
-		// 24 is header size
-		buf.Grow(24)
+		buf = make([]byte, 24, 24+len(key)+len(extras))
+		// Magic (0)
+		buf[0] = reqMagic
 	}
-	buf.WriteByte(reqMagic)
-	buf.WriteByte(byte(cmd))
+	// Command (1)
+	buf[1] = byte(cmd)
 	kl := len(key)
 	el := len(extras)
-	// Key length
-	binary.Write(buf, binary.BigEndian, uint16(kl))
-	// Extras length
-	buf.WriteByte(byte(el))
-	// Data type
-	buf.WriteByte(0)
-	// VBucket
-	buf.Write(zero16)
-	// Total body length
+	// Key length (2-3)
+	putUint16(buf[2:], uint16(kl))
+	// Extras length (4)
+	buf[4] = byte(el)
+	// Data type (5), always zero
+	// VBucket (6-7), always zero
+	// Total body length (8-11)
 	bl := uint32(kl + el)
 	if item != nil {
 		bl += uint32(len(item.Value))
 	}
-	binary.Write(buf, binary.BigEndian, bl)
-	// Opaque
-	buf.Write(zero32)
-	// CAS
-	if item != nil && item.casid != 0 {
-		binary.Write(buf, binary.BigEndian, item.casid)
-	} else {
-		buf.Write(zero64)
+	putUint32(buf[8:], bl)
+	// Opaque (12-15), always zero
+	// CAS (16-23)
+	casid := uint64(0)
+	if item != nil {
+		casid = item.casid
 	}
+	putUint64(buf[16:], casid)
 	// Extras
 	if el > 0 {
-		buf.Write(extras)
+		buf = append(buf, extras...)
 	}
 	if kl > 0 {
 		// Key itself
-		buf.WriteString(key)
+		buf = append(buf, stobs(key)...)
 	}
-	if _, err = cn.nc.Write(buf.Bytes()); err != nil {
+	if _, err = cn.nc.Write(buf); err != nil {
 		return err
 	}
 	select {
@@ -553,8 +550,8 @@ func (c *Client) parseResponse(cn *conn) ([]byte, []byte, []byte, []byte, error)
 	if hdr[0] != respMagic {
 		return nil, nil, nil, nil, ErrBadMagic
 	}
-	total := int(binary.BigEndian.Uint32(hdr[8:12]))
-	status := binary.BigEndian.Uint16(hdr[6:8])
+	total := int(bUint32(hdr[8:12]))
+	status := bUint16(hdr[6:8])
 	if status != respOk {
 		if _, err = io.CopyN(ioutil.Discard, cn.nc, int64(total)); err != nil {
 			return nil, nil, nil, nil, err
@@ -570,7 +567,7 @@ func (c *Client) parseResponse(cn *conn) ([]byte, []byte, []byte, []byte, error)
 		}
 	}
 	var key []byte
-	kl := int(binary.BigEndian.Uint16(hdr[2:4]))
+	kl := int(bUint16(hdr[2:4]))
 	if kl > 0 {
 		key = make([]byte, int(kl))
 		if _, err = cn.nc.Read(key); err != nil {
@@ -594,7 +591,7 @@ func (c *Client) parseUintResponse(cn *conn) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return binary.BigEndian.Uint64(body), nil
+	return bUint64(body), nil
 }
 
 func (c *Client) parseItemResponse(key string, cn *conn, release bool) (*Item, error) {
@@ -607,7 +604,7 @@ func (c *Client) parseItemResponse(key string, cn *conn, release bool) (*Item, e
 	}
 	var flags uint32
 	if len(extras) > 0 {
-		flags = binary.BigEndian.Uint32(extras)
+		flags = bUint32(extras)
 	}
 	if key == "" && len(k) > 0 {
 		key = string(k)
@@ -616,7 +613,7 @@ func (c *Client) parseItemResponse(key string, cn *conn, release bool) (*Item, e
 		Key:   key,
 		Value: body,
 		Flags: flags,
-		casid: binary.BigEndian.Uint64(hdr[16:24]),
+		casid: bUint64(hdr[16:24]),
 	}, nil
 }
 
@@ -708,8 +705,8 @@ func (c *Client) populateOne(cmd command, item *Item, cas bool) error {
 		return ErrMalformedKey
 	}
 	extras := make([]byte, 8)
-	binary.BigEndian.PutUint32(extras, item.Flags)
-	binary.BigEndian.PutUint32(extras[4:8], uint32(item.Expiration))
+	putUint32(extras, item.Flags)
+	putUint32(extras[4:8], uint32(item.Expiration))
 	if !cas && item.casid != 0 {
 		item.casid = 0
 	}
@@ -722,7 +719,7 @@ func (c *Client) populateOne(cmd command, item *Item, cas bool) error {
 	if err != nil {
 		return err
 	}
-	item.casid = binary.BigEndian.Uint64(hdr[16:24])
+	item.casid = bUint64(hdr[16:24])
 	return nil
 }
 
@@ -759,7 +756,7 @@ func (c *Client) Decrement(key string, delta uint64) (newValue uint64, err error
 
 func (c *Client) incrDecr(cmd command, key string, delta uint64) (uint64, error) {
 	extras := make([]byte, 20)
-	binary.BigEndian.PutUint64(extras, delta)
+	putUint64(extras, delta)
 	// Set expiration to 0xfffffff, so the command fails if the key
 	// does not exist.
 	for ii := 16; ii < 20; ii++ {
