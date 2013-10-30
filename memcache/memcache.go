@@ -460,14 +460,14 @@ func (c *Client) getConn(addr *Addr) (*conn, error) {
 // Get gets the item for the given key. ErrCacheMiss is returned for a
 // memcache cache miss. The key must be at most 250 bytes in length.
 func (c *Client) Get(key string) (*Item, error) {
-	cn, err := c.sendCommand(key, cmdGet, nil, nil)
+	cn, err := c.sendCommand(key, cmdGet, nil, 0, nil)
 	if err != nil {
 		return nil, err
 	}
 	return c.parseItemResponse(key, cn, true)
 }
 
-func (c *Client) sendCommand(key string, cmd command, item *Item, extras []byte) (*conn, error) {
+func (c *Client) sendCommand(key string, cmd command, value []byte, casid uint64, extras []byte) (*conn, error) {
 	if !legalKey(key) {
 		return nil, ErrMalformedKey
 	}
@@ -480,11 +480,11 @@ func (c *Client) sendCommand(key string, cmd command, item *Item, extras []byte)
 		return nil, err
 	}
 	defer cn.condClose(&err)
-	err = c.sendConnCommand(cn, key, cmd, item, extras)
+	err = c.sendConnCommand(cn, key, cmd, value, casid, extras)
 	return cn, err
 }
 
-func (c *Client) sendConnCommand(cn *conn, key string, cmd command, item *Item, extras []byte) (err error) {
+func (c *Client) sendConnCommand(cn *conn, key string, cmd command, value []byte, casid uint64, extras []byte) (err error) {
 	var buf []byte
 	select {
 	// 24 is header size
@@ -506,17 +506,11 @@ func (c *Client) sendConnCommand(cn *conn, key string, cmd command, item *Item, 
 	// Data type (5), always zero
 	// VBucket (6-7), always zero
 	// Total body length (8-11)
-	bl := uint32(kl + el)
-	if item != nil {
-		bl += uint32(len(item.Value))
-	}
+	vl := len(value)
+	bl := uint32(kl + el + vl)
 	putUint32(buf[8:], bl)
 	// Opaque (12-15), always zero
 	// CAS (16-23)
-	casid := uint64(0)
-	if item != nil {
-		casid = item.casid
-	}
 	putUint64(buf[16:], casid)
 	// Extras
 	if el > 0 {
@@ -533,8 +527,8 @@ func (c *Client) sendConnCommand(cn *conn, key string, cmd command, item *Item, 
 	case c.bufPool <- buf:
 	default:
 	}
-	if item != nil {
-		if _, err = cn.nc.Write(item.Value); err != nil {
+	if vl > 0 {
+		if _, err = cn.nc.Write(value); err != nil {
 			return err
 		}
 	}
@@ -646,11 +640,11 @@ func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
 			}
 			defer cn.condRelease(&err)
 			for _, k := range keys {
-				if err = c.sendConnCommand(cn, k, cmdGetKQ, nil, nil); err != nil {
+				if err = c.sendConnCommand(cn, k, cmdGetKQ, nil, 0, nil); err != nil {
 					return
 				}
 			}
-			if err = c.sendConnCommand(cn, "", cmdNoop, nil, nil); err != nil {
+			if err = c.sendConnCommand(cn, "", cmdNoop, nil, 0, nil); err != nil {
 				return
 			}
 			var item *Item
@@ -707,10 +701,11 @@ func (c *Client) populateOne(cmd command, item *Item, cas bool) error {
 	extras := make([]byte, 8)
 	putUint32(extras, item.Flags)
 	putUint32(extras[4:8], uint32(item.Expiration))
-	if !cas && item.casid != 0 {
-		item.casid = 0
+	casid := item.casid
+	if !cas {
+		casid = 0
 	}
-	cn, err := c.sendCommand(item.Key, cmd, item, extras)
+	cn, err := c.sendCommand(item.Key, cmd, item.Value, casid, extras)
 	if err != nil {
 		return err
 	}
@@ -726,7 +721,7 @@ func (c *Client) populateOne(cmd command, item *Item, cas bool) error {
 // Delete deletes the item with the provided key. The error ErrCacheMiss is
 // returned if the item didn't already exist in the cache.
 func (c *Client) Delete(key string) error {
-	cn, err := c.sendCommand(key, cmdDelete, nil, nil)
+	cn, err := c.sendCommand(key, cmdDelete, nil, 0, nil)
 	if err != nil {
 		return err
 	}
@@ -762,7 +757,7 @@ func (c *Client) incrDecr(cmd command, key string, delta uint64) (uint64, error)
 	for ii := 16; ii < 20; ii++ {
 		extras[ii] = 0xff
 	}
-	cn, err := c.sendCommand(key, cmd, nil, extras)
+	cn, err := c.sendCommand(key, cmd, nil, 0, extras)
 	if err != nil {
 		return 0, err
 	}
