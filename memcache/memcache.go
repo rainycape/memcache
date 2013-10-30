@@ -352,8 +352,14 @@ func (cn *conn) condClose(err *error) {
 
 func (c *Client) closeIdleConns() {
 	for _, v := range c.freeconn {
-		for cn := range v {
-			cn.nc.Close()
+	NextIdle:
+		for {
+			select {
+			case cn := <-v:
+				cn.nc.Close()
+			default:
+				break NextIdle
+			}
 		}
 	}
 }
