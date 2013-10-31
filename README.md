@@ -6,36 +6,36 @@ library at http://github.com/bradfitz/gomemcache. The following is
 a comparison between the original library and this one:
 
     benchmark                               old ns/op    new ns/op    delta
-    BenchmarkSetGet                            214443       175154  -18.32%
-    BenchmarkSetGetLarge                       262164       196155  -25.18%
-    BenchmarkConcurrentSetGetSmall10_100     82561221     62172865  -24.69%
-    BenchmarkConcurrentSetGetLarge10_100     96067285     74113235  -22.85%
-    BenchmarkConcurrentSetGetSmall20_100    152834658    116654143  -23.67%
-    BenchmarkConcurrentSetGetLarge20_100    202574186    144950678  -28.45%
+    BenchmarkSetGet                            214443       138200  -35.55%
+    BenchmarkSetGetLarge                       262164       146594  -44.08%
+    BenchmarkConcurrentSetGetSmall10_100     82561221     51282962  -37.88%
+    BenchmarkConcurrentSetGetLarge10_100     96067285     63887183  -33.50%
+    BenchmarkConcurrentSetGetSmall20_100    152834658     75607154  -50.53%
+    BenchmarkConcurrentSetGetLarge20_100    202574186     96010615  -52.60%
 
     benchmark                                old MB/s     new MB/s  speedup
-    BenchmarkSetGet                              0.03         0.03    1.00x
-    BenchmarkSetGetLarge                         4.82         6.44    1.34x
-    BenchmarkConcurrentSetGetSmall10_100         0.07         0.10    1.43x
-    BenchmarkConcurrentSetGetLarge10_100        13.16        17.05    1.30x
-    BenchmarkConcurrentSetGetSmall20_100         0.08         0.10    1.25x
-    BenchmarkConcurrentSetGetLarge20_100        12.48        17.44    1.40x
+    BenchmarkSetGet                              0.03         0.04    1.33x
+    BenchmarkSetGetLarge                         4.82         8.62    1.79x
+    BenchmarkConcurrentSetGetSmall10_100         0.07         0.12    1.71x
+    BenchmarkConcurrentSetGetLarge10_100        13.16        19.78    1.50x
+    BenchmarkConcurrentSetGetSmall20_100         0.08         0.16    2.00x
+    BenchmarkConcurrentSetGetLarge20_100        12.48        26.33    2.11x
 
     benchmark                              old allocs   new allocs    delta
     BenchmarkSetGet                                18            6  -66.67%
     BenchmarkSetGetLarge                           19            6  -68.42%
-    BenchmarkConcurrentSetGetSmall10_100        58469         6268  -89.28%
-    BenchmarkConcurrentSetGetLarge10_100        59848         6277  -89.51%
-    BenchmarkConcurrentSetGetSmall20_100       117177        12663  -89.19%
-    BenchmarkConcurrentSetGetLarge20_100       120173        12686  -89.44%
+    BenchmarkConcurrentSetGetSmall10_100        58469         6199  -89.40%
+    BenchmarkConcurrentSetGetLarge10_100        59848         6196  -89.65%
+    BenchmarkConcurrentSetGetSmall20_100       117177        12432  -89.39%
+    BenchmarkConcurrentSetGetLarge20_100       120173        12413  -89.67%
 
     benchmark                               old bytes    new bytes    delta
     BenchmarkSetGet                              2479          170  -93.14%
     BenchmarkSetGetLarge                         7537         1184  -84.29%
-    BenchmarkConcurrentSetGetSmall10_100      3101520       203867  -93.43%
-    BenchmarkConcurrentSetGetLarge10_100      8330341      1211143  -85.46%
-    BenchmarkConcurrentSetGetSmall20_100      6318072       421952  -93.32%
-    BenchmarkConcurrentSetGetLarge20_100     16884200      2437906  -85.56%
+    BenchmarkConcurrentSetGetSmall10_100      3101520       187245  -93.96%
+    BenchmarkConcurrentSetGetLarge10_100      8330341      1197783  -85.62%
+    BenchmarkConcurrentSetGetSmall20_100      6318072       374977  -94.07%
+    BenchmarkConcurrentSetGetLarge20_100     16884200      2398491  -85.79%
 
 ## Installing
 
