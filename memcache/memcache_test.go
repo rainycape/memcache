@@ -22,6 +22,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -177,5 +178,8 @@ func testWithClient(t *testing.T, c *Client) {
 	if err != ErrBadIncrDec {
 		t.Fatalf("increment non-number: want %v, got %v", ErrBadIncrDec, err)
 	}
-
+	// Invalid key
+	if err := c.Set(&Item{Key: strings.Repeat("f", 251), Value: []byte("bar")}); err != ErrMalformedKey {
+		t.Errorf("expecting ErrMalformedKey when using key too long, got nil")
+	}
 }

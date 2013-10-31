@@ -471,9 +471,6 @@ func (c *Client) Get(key string) (*Item, error) {
 }
 
 func (c *Client) sendCommand(key string, cmd command, value []byte, casid uint64, extras []byte) (*conn, error) {
-	if !legalKey(key) {
-		return nil, ErrMalformedKey
-	}
 	addr, err := c.selector.PickServer(key)
 	if err != nil {
 		return nil, err
@@ -538,7 +535,7 @@ func (c *Client) sendConnCommand(cn *conn, key string, cmd command, value []byte
 	return nil
 }
 
-func (c *Client) parseResponse(cn *conn) ([]byte, []byte, []byte, []byte, error) {
+func (c *Client) parseResponse(rKey string, cn *conn) ([]byte, []byte, []byte, []byte, error) {
 	var err error
 	hdr := make([]byte, 24)
 	if _, err = cn.nc.Read(hdr); err != nil {
@@ -552,6 +549,9 @@ func (c *Client) parseResponse(cn *conn) ([]byte, []byte, []byte, []byte, error)
 	if status != respOk {
 		if _, err = io.CopyN(ioutil.Discard, cn.nc, int64(total)); err != nil {
 			return nil, nil, nil, nil, err
+		}
+		if status == respInvalidArgs && !legalKey(rKey) {
+			return nil, nil, nil, nil, ErrMalformedKey
 		}
 		return nil, nil, nil, nil, response(status).asError()
 	}
@@ -582,8 +582,8 @@ func (c *Client) parseResponse(cn *conn) ([]byte, []byte, []byte, []byte, error)
 	return hdr, key, extras, body, nil
 }
 
-func (c *Client) parseUintResponse(cn *conn) (uint64, error) {
-	_, _, _, body, err := c.parseResponse(cn)
+func (c *Client) parseUintResponse(key string, cn *conn) (uint64, error) {
+	_, _, _, body, err := c.parseResponse(key, cn)
 	cn.condRelease(&err)
 	if err != nil {
 		return 0, err
@@ -592,7 +592,7 @@ func (c *Client) parseUintResponse(cn *conn) (uint64, error) {
 }
 
 func (c *Client) parseItemResponse(key string, cn *conn, release bool) (*Item, error) {
-	hdr, k, extras, body, err := c.parseResponse(cn)
+	hdr, k, extras, body, err := c.parseResponse(key, cn)
 	if release {
 		cn.condRelease(&err)
 	}
@@ -621,9 +621,6 @@ func (c *Client) parseItemResponse(key string, cn *conn, release bool) (*Item, e
 func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
 	keyMap := make(map[*Addr][]string)
 	for _, key := range keys {
-		if !legalKey(key) {
-			return nil, ErrMalformedKey
-		}
 		addr, err := c.selector.PickServer(key)
 		if err != nil {
 			return nil, err
@@ -694,9 +691,6 @@ func (c *Client) CompareAndSwap(item *Item) error {
 }
 
 func (c *Client) populateOne(cmd command, item *Item, cas bool) error {
-	if item == nil || !legalKey(item.Key) {
-		return ErrMalformedKey
-	}
 	extras := make([]byte, 8)
 	putUint32(extras, item.Flags)
 	putUint32(extras[4:8], uint32(item.Expiration))
@@ -708,7 +702,7 @@ func (c *Client) populateOne(cmd command, item *Item, cas bool) error {
 	if err != nil {
 		return err
 	}
-	hdr, _, _, _, err := c.parseResponse(cn)
+	hdr, _, _, _, err := c.parseResponse(item.Key, cn)
 	cn.condRelease(&err)
 	if err != nil {
 		return err
@@ -724,7 +718,7 @@ func (c *Client) Delete(key string) error {
 	if err != nil {
 		return err
 	}
-	_, _, _, _, err = c.parseResponse(cn)
+	_, _, _, _, err = c.parseResponse(key, cn)
 	cn.condRelease(&err)
 	return err
 }
@@ -760,5 +754,5 @@ func (c *Client) incrDecr(cmd command, key string, delta uint64) (uint64, error)
 	if err != nil {
 		return 0, err
 	}
-	return c.parseUintResponse(cn)
+	return c.parseUintResponse(key, cn)
 }
