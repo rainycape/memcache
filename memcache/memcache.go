@@ -166,18 +166,6 @@ const (
 	respMagic uint8 = 0x81
 )
 
-// resumableError returns true if err is only a protocol-level cache error.
-// This is used to determine whether or not a server connection should
-// be re-used or not. If an error occurs, by default we don't reuse the
-// connection, unless it was just a cache error.
-func resumableError(err error) bool {
-	switch err {
-	case ErrCacheMiss, ErrCASConflict, ErrNotStored, ErrMalformedKey, ErrBadIncrDec:
-		return true
-	}
-	return false
-}
-
 func legalKey(key string) bool {
 	if len(key) > 250 {
 		return false
@@ -340,9 +328,10 @@ func (cn *conn) release() {
 // cache miss).  The purpose is to not recycle TCP connections that
 // are bad.
 func (cn *conn) condRelease(err *error) {
-	if *err == nil || resumableError(*err) {
+	switch *err {
+	case nil, ErrCacheMiss, ErrCASConflict, ErrNotStored, ErrMalformedKey, ErrBadIncrDec:
 		cn.release()
-	} else {
+	default:
 		cn.nc.Close()
 	}
 }
@@ -703,10 +692,11 @@ func (c *Client) populateOne(cmd command, item *Item, cas bool) error {
 		return err
 	}
 	hdr, _, _, _, err := c.parseResponse(item.Key, cn)
-	cn.condRelease(&err)
 	if err != nil {
+		cn.condRelease(&err)
 		return err
 	}
+	cn.release()
 	item.casid = bUint64(hdr[16:24])
 	return nil
 }
