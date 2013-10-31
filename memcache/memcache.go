@@ -236,7 +236,9 @@ func (c *Client) Timeout() time.Duration {
 }
 
 // SetTimeout specifies the socket read/write timeout.
-// If zero, DefaultTimeout is used.
+// If zero, DefaultTimeout is used. If < 0, there's
+// no timeout. This method must be called before any
+// connections to the memcached server are opened.
 func (c *Client) SetTimeout(timeout time.Duration) {
 	if timeout == time.Duration(0) {
 		timeout = DefaultTimeout
@@ -333,10 +335,6 @@ func (cn *conn) release() {
 	cn.c.putFreeConn(cn.addr, cn)
 }
 
-func (cn *conn) extendDeadline() {
-	cn.nc.SetDeadline(time.Now().Add(cn.c.timeout))
-}
-
 // condRelease releases this connection if the error pointed to by err
 // is is nil (not an error) or is only a protocol level error (e.g. a
 // cache miss).  The purpose is to not recycle TCP connections that
@@ -419,25 +417,28 @@ func (c *Client) dial(addr *Addr) (net.Conn, error) {
 		cn  net.Conn
 		err error
 	}
-	ch := make(chan connError)
-	go func() {
-		nc, err := net.Dial(addr.Network(), addr.String())
-		ch <- connError{nc, err}
-	}()
-	select {
-	case ce := <-ch:
-		return ce.cn, ce.err
-	case <-time.After(c.timeout):
-		// Too slow. Fall through.
-	}
-	// Close the conn if it does end up finally coming in
-	go func() {
-		ce := <-ch
-		if ce.err == nil {
-			ce.cn.Close()
+	if c.timeout > 0 {
+		ch := make(chan connError)
+		go func() {
+			nc, err := net.Dial(addr.Network(), addr.String())
+			ch <- connError{nc, err}
+		}()
+		select {
+		case ce := <-ch:
+			return ce.cn, ce.err
+		case <-time.After(c.timeout):
+			// Too slow. Fall through.
 		}
-	}()
-	return nil, &ConnectTimeoutError{addr}
+		// Close the conn if it does end up finally coming in
+		go func() {
+			ce := <-ch
+			if ce.err == nil {
+				ce.cn.Close()
+			}
+		}()
+		return nil, &ConnectTimeoutError{addr}
+	}
+	return net.Dial(addr.Network(), addr.String())
 }
 
 func (c *Client) getConn(addr *Addr) (*conn, error) {
@@ -453,7 +454,9 @@ func (c *Client) getConn(addr *Addr) (*conn, error) {
 			c:    c,
 		}
 	}
-	cn.extendDeadline()
+	if c.timeout > 0 {
+		cn.nc.SetDeadline(time.Now().Add(c.timeout))
+	}
 	return cn, nil
 }
 
