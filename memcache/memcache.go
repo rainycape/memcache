@@ -369,7 +369,7 @@ func (c *Client) closeIdleConns() {
 	}
 }
 
-func (c *Client) putFreeConn(addr net.Addr, cn *conn) {
+func (c *Client) putFreeConn(addr *Addr, cn *conn) {
 	c.mu.RLock()
 	freelist := c.freeconn[addr.String()]
 	maxIdle := c.maxIdlePerAddr
@@ -388,7 +388,7 @@ func (c *Client) putFreeConn(addr net.Addr, cn *conn) {
 	}
 }
 
-func (c *Client) getFreeConn(addr net.Addr) (cn *conn, ok bool) {
+func (c *Client) getFreeConn(addr *Addr) (cn *conn, ok bool) {
 	c.mu.RLock()
 	freelist := c.freeconn[addr.String()]
 	c.mu.RUnlock()
