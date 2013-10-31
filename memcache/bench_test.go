@@ -83,6 +83,22 @@ func benchmarkConcurrentSetGet(b *testing.B, item *Item, count int, opcount int)
 	cmd.Wait()
 }
 
+func BenchmarkGetCacheMiss(b *testing.B) {
+	key := "not"
+	cmd, c := newUnixServer(b)
+	c.SetTimeout(time.Duration(-1))
+	c.Delete(key)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := c.Get(key); err != ErrCacheMiss {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	cmd.Process.Kill()
+	cmd.Wait()
+}
+
 func BenchmarkConcurrentSetGetSmall10_100(b *testing.B) {
 	benchmarkConcurrentSetGet(b, smallItem(), 10, 100)
 }
