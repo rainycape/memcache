@@ -10,6 +10,7 @@ import (
 
 func benchmarkSetGet(b *testing.B, item *Item) {
 	cmd, c := newUnixServer(b)
+	c.SetTimeout(time.Duration(-1))
 	key := item.Key
 	b.SetBytes(int64(len(item.Key) + len(item.Value)))
 	b.ResetTimer()
@@ -49,7 +50,7 @@ func benchmarkConcurrentSetGet(b *testing.B, item *Item, count int, opcount int)
 	defer runtime.GOMAXPROCS(mp)
 	runtime.GOMAXPROCS(count)
 	cmd, c := newUnixServer(b)
-	c.SetTimeout(250 * time.Millisecond)
+	c.SetTimeout(time.Duration(-1))
 	// Items are not thread safe
 	items := make([]*Item, count)
 	for ii := range items {
