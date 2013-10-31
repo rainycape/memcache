@@ -358,13 +358,13 @@ func (c *Client) closeIdleConns() {
 
 func (c *Client) putFreeConn(addr *Addr, cn *conn) {
 	c.mu.RLock()
-	freelist := c.freeconn[addr.String()]
+	freelist := c.freeconn[addr.s]
 	maxIdle := c.maxIdlePerAddr
 	c.mu.RUnlock()
 	if freelist == nil && maxIdle > 0 {
 		freelist = make(chan *conn, maxIdle)
 		c.mu.Lock()
-		c.freeconn[addr.String()] = freelist
+		c.freeconn[addr.s] = freelist
 		c.mu.Unlock()
 	}
 	select {
@@ -377,7 +377,7 @@ func (c *Client) putFreeConn(addr *Addr, cn *conn) {
 
 func (c *Client) getFreeConn(addr *Addr) (cn *conn, ok bool) {
 	c.mu.RLock()
-	freelist := c.freeconn[addr.String()]
+	freelist := c.freeconn[addr.s]
 	c.mu.RUnlock()
 	if freelist == nil {
 		return nil, false
@@ -409,7 +409,7 @@ func (c *Client) dial(addr *Addr) (net.Conn, error) {
 	if c.timeout > 0 {
 		ch := make(chan connError)
 		go func() {
-			nc, err := net.Dial(addr.Network(), addr.String())
+			nc, err := net.Dial(addr.n, addr.s)
 			ch <- connError{nc, err}
 		}()
 		select {
@@ -427,7 +427,7 @@ func (c *Client) dial(addr *Addr) (net.Conn, error) {
 		}()
 		return nil, &ConnectTimeoutError{addr}
 	}
-	return net.Dial(addr.Network(), addr.String())
+	return net.Dial(addr.n, addr.s)
 }
 
 func (c *Client) getConn(addr *Addr) (*conn, error) {

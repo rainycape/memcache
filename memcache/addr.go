@@ -7,6 +7,7 @@ import (
 type Addr struct {
 	net.Addr
 	s string
+	n string
 }
 
 func (a *Addr) String() string {
@@ -17,5 +18,6 @@ func NewAddr(addr net.Addr) *Addr {
 	return &Addr{
 		Addr: addr,
 		s:    addr.String(),
+		n:    addr.Network(),
 	}
 }
