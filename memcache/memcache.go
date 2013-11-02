@@ -336,12 +336,6 @@ func (cn *conn) condRelease(err *error) {
 	}
 }
 
-func (cn *conn) condClose(err *error) {
-	if *err != nil {
-		cn.nc.Close()
-	}
-}
-
 func (c *Client) closeIdleConns() {
 	for _, v := range c.freeconn {
 	NextIdle:
@@ -468,8 +462,11 @@ func (c *Client) sendCommand(key string, cmd command, value []byte, casid uint64
 	if err != nil {
 		return nil, err
 	}
-	defer cn.condClose(&err)
 	err = c.sendConnCommand(cn, key, cmd, value, casid, extras)
+	if err != nil {
+		cn.nc.Close()
+		return nil, err
+	}
 	return cn, err
 }
 
