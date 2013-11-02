@@ -560,28 +560,28 @@ func (c *Client) parseResponse(rKey string, cn *conn) ([]byte, []byte, []byte, [
 			return nil, nil, nil, nil, err
 		}
 	}
-	var body []byte
-	bl := total - el - kl
-	if bl > 0 {
-		body = make([]byte, bl)
-		if _, err = cn.nc.Read(body); err != nil {
+	var value []byte
+	vl := total - el - kl
+	if vl > 0 {
+		value = make([]byte, vl)
+		if _, err = cn.nc.Read(value); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
-	return hdr, key, extras, body, nil
+	return hdr, key, extras, value, nil
 }
 
 func (c *Client) parseUintResponse(key string, cn *conn) (uint64, error) {
-	_, _, _, body, err := c.parseResponse(key, cn)
+	_, _, _, value, err := c.parseResponse(key, cn)
 	cn.condRelease(&err)
 	if err != nil {
 		return 0, err
 	}
-	return bUint64(body), nil
+	return bUint64(value), nil
 }
 
 func (c *Client) parseItemResponse(key string, cn *conn, release bool) (*Item, error) {
-	hdr, k, extras, body, err := c.parseResponse(key, cn)
+	hdr, k, extras, value, err := c.parseResponse(key, cn)
 	if release {
 		cn.condRelease(&err)
 	}
@@ -597,7 +597,7 @@ func (c *Client) parseItemResponse(key string, cn *conn, release bool) (*Item, e
 	}
 	return &Item{
 		Key:   key,
-		Value: body,
+		Value: value,
 		Flags: flags,
 		casid: bUint64(hdr[16:24]),
 	}, nil
