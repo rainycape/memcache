@@ -8,6 +8,21 @@ import (
 	"time"
 )
 
+func benchmarkSet(b *testing.B, item *Item) {
+	cmd, c := newUnixServer(b)
+	c.SetTimeout(time.Duration(-1))
+	b.SetBytes(int64(len(item.Key) + len(item.Value)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := c.Set(item); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	cmd.Process.Kill()
+	cmd.Wait()
+}
+
 func benchmarkSetGet(b *testing.B, item *Item) {
 	cmd, c := newUnixServer(b)
 	c.SetTimeout(time.Duration(-1))
@@ -35,6 +50,14 @@ func largeItem() *Item {
 
 func smallItem() *Item {
 	return &Item{Key: "foo", Value: []byte("bar")}
+}
+
+func BenchmarkSet(b *testing.B) {
+	benchmarkSet(b, smallItem())
+}
+
+func BenchmarkSetLarge(b *testing.B) {
+	benchmarkSet(b, largeItem())
 }
 
 func BenchmarkSetGet(b *testing.B) {
