@@ -315,22 +315,16 @@ type Item struct {
 type conn struct {
 	nc   net.Conn
 	addr *Addr
-	c    *Client
-}
-
-// release returns this connection back to the client's free pool
-func (cn *conn) release() {
-	cn.c.putFreeConn(cn.addr, cn)
 }
 
 // condRelease releases this connection if the error pointed to by err
 // is is nil (not an error) or is only a protocol level error (e.g. a
 // cache miss).  The purpose is to not recycle TCP connections that
 // are bad.
-func (cn *conn) condRelease(err *error) {
+func (c *Client) condRelease(cn *conn, err *error) {
 	switch *err {
 	case nil, ErrCacheMiss, ErrCASConflict, ErrNotStored, ErrMalformedKey, ErrBadIncrDec:
-		cn.release()
+		c.putFreeConn(cn)
 	default:
 		cn.nc.Close()
 	}
@@ -350,15 +344,15 @@ func (c *Client) closeIdleConns() {
 	}
 }
 
-func (c *Client) putFreeConn(addr *Addr, cn *conn) {
+func (c *Client) putFreeConn(cn *conn) {
 	c.mu.RLock()
-	freelist := c.freeconn[addr.s]
+	freelist := c.freeconn[cn.addr.s]
 	maxIdle := c.maxIdlePerAddr
 	c.mu.RUnlock()
 	if freelist == nil && maxIdle > 0 {
 		freelist = make(chan *conn, maxIdle)
 		c.mu.Lock()
-		c.freeconn[addr.s] = freelist
+		c.freeconn[cn.addr.s] = freelist
 		c.mu.Unlock()
 	}
 	select {
@@ -369,18 +363,18 @@ func (c *Client) putFreeConn(addr *Addr, cn *conn) {
 	}
 }
 
-func (c *Client) getFreeConn(addr *Addr) (cn *conn, ok bool) {
+func (c *Client) getFreeConn(addr *Addr) *conn {
 	c.mu.RLock()
 	freelist := c.freeconn[addr.s]
 	c.mu.RUnlock()
 	if freelist == nil {
-		return nil, false
+		return nil
 	}
 	select {
 	case cn := <-freelist:
-		return cn, true
+		return cn
 	default:
-		return nil, false
+		return nil
 	}
 }
 
@@ -425,8 +419,8 @@ func (c *Client) dial(addr *Addr) (net.Conn, error) {
 }
 
 func (c *Client) getConn(addr *Addr) (*conn, error) {
-	cn, ok := c.getFreeConn(addr)
-	if !ok {
+	cn := c.getFreeConn(addr)
+	if cn == nil {
 		nc, err := c.dial(addr)
 		if err != nil {
 			return nil, err
@@ -434,7 +428,6 @@ func (c *Client) getConn(addr *Addr) (*conn, error) {
 		cn = &conn{
 			nc:   nc,
 			addr: addr,
-			c:    c,
 		}
 	}
 	if c.timeout > 0 {
@@ -570,7 +563,7 @@ func (c *Client) parseResponse(rKey string, cn *conn) ([]byte, []byte, []byte, [
 
 func (c *Client) parseUintResponse(key string, cn *conn) (uint64, error) {
 	_, _, _, value, err := c.parseResponse(key, cn)
-	cn.condRelease(&err)
+	c.condRelease(cn, &err)
 	if err != nil {
 		return 0, err
 	}
@@ -580,7 +573,7 @@ func (c *Client) parseUintResponse(key string, cn *conn) (uint64, error) {
 func (c *Client) parseItemResponse(key string, cn *conn, release bool) (*Item, error) {
 	hdr, k, extras, value, err := c.parseResponse(key, cn)
 	if release {
-		cn.condRelease(&err)
+		c.condRelease(cn, &err)
 	}
 	if err != nil {
 		return nil, err
@@ -624,7 +617,7 @@ func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
 			if err != nil {
 				return
 			}
-			defer cn.condRelease(&err)
+			defer c.condRelease(cn, &err)
 			for _, k := range keys {
 				if err = c.sendConnCommand(cn, k, cmdGetKQ, nil, 0, nil); err != nil {
 					return
@@ -690,10 +683,10 @@ func (c *Client) populateOne(cmd command, item *Item, cas bool) error {
 	}
 	hdr, _, _, _, err := c.parseResponse(item.Key, cn)
 	if err != nil {
-		cn.condRelease(&err)
+		c.condRelease(cn, &err)
 		return err
 	}
-	cn.release()
+	c.putFreeConn(cn)
 	item.casid = bUint64(hdr[16:24])
 	return nil
 }
@@ -706,7 +699,7 @@ func (c *Client) Delete(key string) error {
 		return err
 	}
 	_, _, _, _, err = c.parseResponse(key, cn)
-	cn.condRelease(&err)
+	c.condRelease(cn, &err)
 	return err
 }
 
