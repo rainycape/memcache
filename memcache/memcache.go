@@ -517,7 +517,7 @@ func (c *Client) sendConnCommand(cn *conn, key string, cmd command, value []byte
 func (c *Client) parseResponse(rKey string, cn *conn) ([]byte, []byte, []byte, []byte, error) {
 	var err error
 	hdr := make([]byte, 24)
-	if _, err = cn.nc.Read(hdr); err != nil {
+	if err = readAtLeast(cn.nc, hdr, 24); err != nil {
 		return nil, nil, nil, nil, err
 	}
 	if hdr[0] != respMagic {
@@ -538,7 +538,7 @@ func (c *Client) parseResponse(rKey string, cn *conn) ([]byte, []byte, []byte, [
 	el := int(hdr[4])
 	if el > 0 {
 		extras = make([]byte, el)
-		if _, err = cn.nc.Read(extras); err != nil {
+		if err = readAtLeast(cn.nc, extras, el); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -546,7 +546,7 @@ func (c *Client) parseResponse(rKey string, cn *conn) ([]byte, []byte, []byte, [
 	kl := int(bUint16(hdr[2:4]))
 	if kl > 0 {
 		key = make([]byte, int(kl))
-		if _, err = cn.nc.Read(key); err != nil {
+		if err = readAtLeast(cn.nc, key, kl); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
@@ -554,7 +554,7 @@ func (c *Client) parseResponse(rKey string, cn *conn) ([]byte, []byte, []byte, [
 	vl := total - el - kl
 	if vl > 0 {
 		value = make([]byte, vl)
-		if _, err = cn.nc.Read(value); err != nil {
+		if err = readAtLeast(cn.nc, value, vl); err != nil {
 			return nil, nil, nil, nil, err
 		}
 	}
