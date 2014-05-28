@@ -389,6 +389,14 @@ func (cte *ConnectTimeoutError) Error() string {
 	return "memcache: connect timeout to " + cte.Addr.String()
 }
 
+func (cte *ConnectTimeoutError) Timeout() bool {
+	return true
+}
+
+func (cte *ConnectTimeoutError) Temporary() bool {
+	return true
+}
+
 func (c *Client) dial(addr *Addr) (net.Conn, error) {
 	type connError struct {
 		cn  net.Conn
