@@ -398,30 +398,15 @@ func (cte *ConnectTimeoutError) Temporary() bool {
 }
 
 func (c *Client) dial(addr *Addr) (net.Conn, error) {
-	type connError struct {
-		cn  net.Conn
-		err error
-	}
 	if c.timeout > 0 {
-		ch := make(chan connError)
-		go func() {
-			nc, err := net.Dial(addr.n, addr.s)
-			ch <- connError{nc, err}
-		}()
-		select {
-		case ce := <-ch:
-			return ce.cn, ce.err
-		case <-time.After(c.timeout):
-			// Too slow. Fall through.
-		}
-		// Close the conn if it does end up finally coming in
-		go func() {
-			ce := <-ch
-			if ce.err == nil {
-				ce.cn.Close()
+		conn, err := net.DialTimeout(addr.n, addr.s, c.timeout)
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				return nil, &ConnectTimeoutError{addr}
 			}
-		}()
-		return nil, &ConnectTimeoutError{addr}
+			return nil, err
+		}
+		return conn, nil
 	}
 	return net.Dial(addr.n, addr.s)
 }
