@@ -642,13 +642,13 @@ func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
 
 // Set writes the given item, unconditionally.
 func (c *Client) Set(item *Item) error {
-	return c.populateOne(cmdSet, item, false)
+	return c.populateOne(cmdSet, item, 0)
 }
 
 // Add writes the given item, if no value already exists for its
 // key. ErrNotStored is returned if that condition is not met.
 func (c *Client) Add(item *Item) error {
-	return c.populateOne(cmdAdd, item, false)
+	return c.populateOne(cmdAdd, item, 0)
 }
 
 // CompareAndSwap writes the given item that was previously returned
@@ -659,17 +659,13 @@ func (c *Client) Add(item *Item) error {
 // calls. ErrNotStored is returned if the value was evicted in between
 // the calls.
 func (c *Client) CompareAndSwap(item *Item) error {
-	return c.populateOne(cmdSet, item, true)
+	return c.populateOne(cmdSet, item, item.casid)
 }
 
-func (c *Client) populateOne(cmd command, item *Item, cas bool) error {
+func (c *Client) populateOne(cmd command, item *Item, casid uint64) error {
 	extras := make([]byte, 8)
 	putUint32(extras, item.Flags)
 	putUint32(extras[4:8], uint32(item.Expiration))
-	casid := item.casid
-	if !cas {
-		casid = 0
-	}
 	cn, err := c.sendCommand(item.Key, cmd, item.Value, casid, extras)
 	if err != nil {
 		return err
