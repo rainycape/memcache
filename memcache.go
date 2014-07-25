@@ -98,6 +98,19 @@ const (
 	cmdVersion
 	cmdGetK
 	cmdGetKQ
+	cmdAppend
+	cmdPrepend
+	cmdStat
+	cmdSetQ
+	cmdAddQ
+	cmdReplaceQ
+	cmdDeleteQ
+	cmdIncrementQ
+	cmdDecrementQ
+	cmdQuitQ
+	cmdFlushQ
+	cmdAppendQ
+	cmdPrependQ
 )
 
 type response uint16
