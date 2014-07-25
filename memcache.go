@@ -202,18 +202,20 @@ func poolSize() int {
 // New returns a memcache client using the provided server(s)
 // with equal weight. If a server is listed multiple times,
 // it gets a proportional amount of weight.
-func New(server ...string) *Client {
-	ss := new(ServerList)
-	ss.SetServers(server...)
-	return NewFromSelector(ss)
+func New(server ...string) (*Client, error) {
+	servers, err := NewServerList(server...)
+	if err != nil {
+		return nil, err
+	}
+	return NewFromServers(servers), nil
 }
 
-// NewFromSelector returns a new Client using the provided ServerSelector.
-func NewFromSelector(ss ServerSelector) *Client {
+// NewFromServers returns a new Client using the provided Servers.
+func NewFromServers(servers Servers) *Client {
 	return &Client{
 		timeout:        DefaultTimeout,
 		maxIdlePerAddr: maxIdleConnsPerAddr,
-		selector:       ss,
+		servers:        servers,
 		freeconn:       make(map[string]chan *conn),
 		bufPool:        make(chan []byte, poolSize()),
 	}
@@ -224,7 +226,7 @@ func NewFromSelector(ss ServerSelector) *Client {
 type Client struct {
 	timeout        time.Duration
 	maxIdlePerAddr int
-	selector       ServerSelector
+	servers        Servers
 	mu             sync.RWMutex
 	freeconn       map[string]chan *conn
 	bufPool        chan []byte
@@ -453,7 +455,7 @@ func (c *Client) Get(key string) (*Item, error) {
 }
 
 func (c *Client) sendCommand(key string, cmd command, value []byte, casid uint64, extras []byte) (*conn, error) {
-	addr, err := c.selector.PickServer(key)
+	addr, err := c.servers.PickServer(key)
 	if err != nil {
 		return nil, err
 	}
@@ -606,7 +608,7 @@ func (c *Client) parseItemResponse(key string, cn *conn, release bool) (*Item, e
 func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
 	keyMap := make(map[*Addr][]string)
 	for _, key := range keys {
-		addr, err := c.selector.PickServer(key)
+		addr, err := c.servers.PickServer(key)
 		if err != nil {
 			return nil, err
 		}
