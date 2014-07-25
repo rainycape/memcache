@@ -18,6 +18,7 @@ limitations under the License.
 package memcache
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -739,4 +740,50 @@ func (c *Client) incrDecr(cmd command, key string, delta uint64) (uint64, error)
 		return 0, err
 	}
 	return c.parseUintResponse(key, cn)
+}
+
+// Flush removes all the items in the cache after expiration seconds. If
+// expiration is <= 0, it removes all the items right now.
+func (c *Client) Flush(expiration int) error {
+	servers, err := c.servers.Servers()
+	var failed []*Addr
+	var errs []error
+	if err != nil {
+		return err
+	}
+	var extras []byte
+	if expiration > 0 {
+		extras = make([]byte, 4)
+		putUint32(extras, uint32(expiration))
+	}
+	for _, addr := range servers {
+		cn, err := c.getConn(addr)
+		if err != nil {
+			failed = append(failed, addr)
+			errs = append(errs, err)
+			continue
+		}
+		if err = c.sendConnCommand(cn, "", cmdFlush, nil, 0, extras); err == nil {
+			_, _, _, _, err = c.parseResponse("", cn)
+		}
+		if err != nil {
+			failed = append(failed, addr)
+			errs = append(errs, err)
+		}
+		c.condRelease(cn, &err)
+	}
+	if len(failed) > 0 {
+		var buf bytes.Buffer
+		buf.WriteString("failed to flush some servers: ")
+		for ii, addr := range failed {
+			if ii > 0 {
+				buf.WriteString(", ")
+			}
+			buf.WriteString(addr.String())
+			buf.WriteString(": ")
+			buf.WriteString(errs[ii].Error())
+		}
+		return errors.New(buf.String())
+	}
+	return nil
 }

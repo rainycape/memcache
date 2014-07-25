@@ -190,4 +190,13 @@ func testWithClient(t *testing.T, c *Client) {
 	if err := c.Set(&Item{Key: strings.Repeat("f", 251), Value: []byte("bar")}); err != ErrMalformedKey {
 		t.Errorf("expecting ErrMalformedKey when using key too long, got nil")
 	}
+	// Flush
+	_, err = c.Get("bar")
+	checkErr(err, "get(bar): %v", err)
+	err = c.Flush(0)
+	checkErr(err, "flush: %v", err)
+	_, err = c.Get("bar")
+	if err != ErrCacheMiss {
+		t.Fatalf("post-flush: want ErrCacheMiss, got %v", err)
+	}
 }
