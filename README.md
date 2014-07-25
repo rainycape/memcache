@@ -3,11 +3,11 @@ Memcache Client in Go (golang)
 
 ## Installing
 
-    $ go get gopkgs.com/memcache.v1
+    $ go get gopkgs.com/memcache.v2
 
 After this command *memcache* is ready to use. Its source will be in:
 
-    $GOPATH/src/gopkgs.com/memcache.v1
+    $GOPATH/src/gopkgs.com/memcache.v2
 
 You can use `go get -u -a` for update all installed packages.
 
@@ -16,7 +16,7 @@ See available versions and documentation at http://gopkgs.com/memcache.
 ## Example
 
     import (
-            "gopkgs.com/memcache.v1"
+            "gopkgs.com/memcache.v2"
     )
 
     func main() {

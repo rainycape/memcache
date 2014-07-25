@@ -11,7 +11,7 @@ import (
 const (
 	goPkgsSrcPath = "github.com/rainycape/memcache"
 	goPkgsName    = "memcache"
-	goPkgsErrFmt  = "invalid import path %s - please use gopkgs.com/%s.v1 or see http://gopkgs.com/%s"
+	goPkgsErrFmt  = "invalid import path %s - please use gopkgs.com/%s.v2 or see http://gopkgs.com/%s"
 )
 
 type goPkgsCheck struct{}
