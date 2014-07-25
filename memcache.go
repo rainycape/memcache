@@ -336,7 +336,7 @@ type conn struct {
 // are bad.
 func (c *Client) condRelease(cn *conn, err *error) {
 	switch *err {
-	case nil, ErrCacheMiss, ErrCASConflict, ErrNotStored, ErrMalformedKey, ErrBadIncrDec:
+	case nil, ErrCacheMiss, ErrCASConflict, ErrNotStored, ErrBadIncrDec:
 		c.putFreeConn(cn)
 	default:
 		cn.nc.Close()
