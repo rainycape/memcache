@@ -3,20 +3,18 @@ Memcache Client in Go (golang)
 
 ## Installing
 
-    $ go get gopkgs.com/memcache.v2
+    $ go get github.com/rainycape/memcache
 
 After this command *memcache* is ready to use. Its source will be in:
 
-    $GOPATH/src/gopkgs.com/memcache.v2
+    $GOPATH/src/github.com/rainycape/memcache
 
 You can use `go get -u -a` for update all installed packages.
-
-See available versions and documentation at http://gopkgs.com/memcache.
 
 ## Example
 
     import (
-            "gopkgs.com/memcache.v2"
+            "github.com/rainycape/memcache"
     )
 
     func main() {
