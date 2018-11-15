@@ -42,7 +42,7 @@ func (c *Client) totalOpen() int {
 func newLocalhostServer(tb testing.TB) *Client {
 	c, err := net.Dial("tcp", testServer)
 	if err != nil {
-		tb.Skip("skipping test; no server running at %s", testServer)
+		tb.Skipf("skipping test; no server running at %s", testServer)
 		return nil
 	}
 	c.Write([]byte("flush_all\r\n"))
