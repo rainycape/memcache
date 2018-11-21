@@ -656,6 +656,12 @@ func (c *Client) GetMulti(keys []string) (map[string]*Item, error) {
 	return m, nil
 }
 
+// Append writes the given item value to existing one
+// ErrNotStored is returned if no item with that key exists
+func (c *Client) Append(item *Item) error {
+	return c.populateOne(cmdAppend, item, 0)
+}
+
 // Set writes the given item, unconditionally.
 func (c *Client) Set(item *Item) error {
 	return c.populateOne(cmdSet, item, 0)
@@ -679,9 +685,12 @@ func (c *Client) CompareAndSwap(item *Item) error {
 }
 
 func (c *Client) populateOne(cmd command, item *Item, casid uint64) error {
-	extras := make([]byte, 8)
-	putUint32(extras, item.Flags)
-	putUint32(extras[4:8], uint32(item.Expiration))
+	var extras []byte
+	if cmd != cmdAppend {
+		extras = make([]byte, 8)
+		putUint32(extras, item.Flags)
+		putUint32(extras[4:8], uint32(item.Expiration))
+	}
 	cn, err := c.sendCommand(item.Key, cmd, item.Value, casid, extras)
 	if err != nil {
 		return err
