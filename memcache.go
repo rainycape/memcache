@@ -74,12 +74,12 @@ var (
 	bUint64   = binary.BigEndian.Uint64
 )
 
-// DefaultTimeout is the default socket read/write timeout.
-const DefaultTimeout = time.Duration(100) * time.Millisecond
-
 const (
-	buffered            = 8 // arbitrary buffered channel size, for readability
-	maxIdleConnsPerAddr = 2 // TODO(bradfitz): make this configurable?
+	// DefaultTimeout is the default socket read/write timeout.
+	DefaultTimeout = 100 * time.Millisecond
+
+	// DefaultMaxIdleConns is the default maximum for idle connections.
+	DefaultMaxIdleConns = 2
 )
 
 type command uint8
@@ -215,7 +215,7 @@ func New(server ...string) (*Client, error) {
 func NewFromServers(servers Servers) *Client {
 	return &Client{
 		timeout:        DefaultTimeout,
-		maxIdlePerAddr: maxIdleConnsPerAddr,
+		maxIdlePerAddr: DefaultMaxIdleConns,
 		servers:        servers,
 		freeconn:       make(map[string]chan *conn),
 		bufPool:        make(chan []byte, poolSize()),
@@ -262,7 +262,7 @@ func (c *Client) MaxIdleConnsPerAddr() int {
 // the default number (currently 2) is used.
 func (c *Client) SetMaxIdleConnsPerAddr(maxIdle int) {
 	if maxIdle == 0 {
-		maxIdle = maxIdleConnsPerAddr
+		maxIdle = DefaultMaxIdleConns
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
