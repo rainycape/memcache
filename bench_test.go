@@ -12,6 +12,7 @@ func benchmarkSet(b *testing.B, item *Item) {
 	cmd, c := newUnixServer(b)
 	c.SetTimeout(time.Duration(-1))
 	b.SetBytes(int64(len(item.Key) + len(item.Value)))
+	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if err := c.Set(item); err != nil {
@@ -28,6 +29,7 @@ func benchmarkSetGet(b *testing.B, item *Item) {
 	c.SetTimeout(time.Duration(-1))
 	key := item.Key
 	b.SetBytes(int64(len(item.Key) + len(item.Value)))
+	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if err := c.Set(item); err != nil {
@@ -80,6 +82,7 @@ func benchmarkConcurrentSetGet(b *testing.B, item *Item, count int, opcount int)
 		items[ii] = &Item{Key: item.Key, Value: item.Value}
 	}
 	b.SetBytes(int64((len(item.Key) + len(item.Value)) * count * opcount))
+	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		var wg sync.WaitGroup
@@ -111,6 +114,7 @@ func BenchmarkGetCacheMiss(b *testing.B) {
 	cmd, c := newUnixServer(b)
 	c.SetTimeout(time.Duration(-1))
 	c.Delete(key)
+	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := c.Get(key); err != ErrCacheMiss {
