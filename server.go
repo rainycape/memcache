@@ -4,6 +4,7 @@ import (
 	"hash/crc32"
 	"net"
 	"strings"
+	"sync"
 )
 
 // Servers is the interface used to manage a set of memcached
@@ -54,11 +55,27 @@ func NewServerList(servers ...string) (*ServerList, error) {
 	return &ServerList{addrs: addrs}, nil
 }
 
+// keyBufPool returns []byte buffers for use by PickServer's call to
+// crc32.ChecksumIEEE to avoid allocations. (but doesn't avoid the
+// copies, which at least are bounded in size and small)
+var keyBufPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 256)
+		return &b
+	},
+}
+
 func (s *ServerList) PickServer(key string) (*Addr, error) {
 	if len(s.addrs) == 0 {
 		return nil, ErrNoServers
 	}
-	cs := crc32.ChecksumIEEE([]byte(key))
+	if len(s.addrs) == 1 {
+		return s.addrs[0], nil
+	}
+	bufp := keyBufPool.Get().(*[]byte)
+	n := copy(*bufp, key)
+	cs := crc32.ChecksumIEEE((*bufp)[:n])
+	keyBufPool.Put(bufp)
 	return s.addrs[cs%uint32(len(s.addrs))], nil
 }
 
