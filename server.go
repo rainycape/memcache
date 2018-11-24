@@ -58,7 +58,7 @@ func (s *ServerList) PickServer(key string) (*Addr, error) {
 	if len(s.addrs) == 0 {
 		return nil, ErrNoServers
 	}
-	cs := crc32.ChecksumIEEE(stobs(key))
+	cs := crc32.ChecksumIEEE([]byte(key))
 	return s.addrs[cs%uint32(len(s.addrs))], nil
 }
 

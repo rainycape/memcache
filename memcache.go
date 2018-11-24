@@ -311,9 +311,6 @@ type Item struct {
 	// Value is the Item's value.
 	Value []byte
 
-	// Object is the Item's value for use with a Codec.
-	Object interface{}
-
 	// Flags are server-opaque flags whose semantics are entirely
 	// up to the app.
 	Flags uint32
@@ -506,7 +503,7 @@ func (c *Client) sendConnCommand(cn *conn, key string, cmd command, value []byte
 	}
 	if kl > 0 {
 		// Key itself
-		buf = append(buf, stobs(key)...)
+		buf = append(buf, []byte(key)...)
 	}
 	if _, err = cn.nc.Write(buf); err != nil {
 		return err
