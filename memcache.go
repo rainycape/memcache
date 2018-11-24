@@ -53,7 +53,7 @@ var (
 	ErrNoStats = errors.New("memcache: no statistics available")
 
 	// ErrMalformedKey is returned when an invalid key is used.
-	// Keys must be at maximum 250 bytes long, ASCII, and not
+	// Keys must be at maximum 250 bytes long and not
 	// contain whitespace or control characters.
 	ErrMalformedKey = errors.New("malformed: key is too long or contains invalid characters")
 
@@ -185,7 +185,7 @@ func legalKey(key string) bool {
 		return false
 	}
 	for i := 0; i < len(key); i++ {
-		if key[i] <= ' ' || key[i] > 0x7e {
+		if key[i] <= ' ' || key[i] == 0x7f {
 			return false
 		}
 	}
@@ -453,6 +453,10 @@ func (c *Client) Get(key string) (*Item, error) {
 }
 
 func (c *Client) sendCommand(key string, cmd command, value []byte, casid uint64, extras []byte) (*conn, error) {
+	if !legalKey(key) {
+		return nil, ErrMalformedKey
+	}
+
 	addr, err := c.servers.PickServer(key)
 	if err != nil {
 		return nil, err
@@ -470,6 +474,10 @@ func (c *Client) sendCommand(key string, cmd command, value []byte, casid uint64
 }
 
 func (c *Client) sendConnCommand(cn *conn, key string, cmd command, value []byte, casid uint64, extras []byte) (err error) {
+	if !legalKey(key) {
+		return ErrMalformedKey
+	}
+
 	var buf []byte
 	select {
 	// 24 is header size
