@@ -24,7 +24,7 @@ You can use `go get -u -a` for update all installed packages.
          }
          mc.Set(&memcache.Item{Key: "foo", Value: []byte("my value")})
 
-         it, err := mc.Get("foo")
+         it, err = mc.Get("foo")
          ...
     }
 
